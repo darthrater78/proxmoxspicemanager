@@ -4,8 +4,10 @@ Proxmox SPICE Connection Manager
 A GUI app to manage and launch SPICE console sessions to Proxmox VMs.
 Connections are saved to ~/.config/proxmox-spice/connections.json
 
-Dependencies: python3-tkinter, curl, jq, remote-viewer
-Install on Fedora: sudo dnf install python3-tkinter virt-viewer
+Dependencies: python3-tkinter, curl, jq, remote-viewer (virt-viewer)
+
+Install on Fedora:  sudo dnf install python3-tkinter virt-viewer curl jq
+Install on Debian:  sudo apt install python3-tk virt-viewer curl jq
 """
 
 import json
@@ -14,30 +16,143 @@ import shutil
 import subprocess
 import tempfile
 import threading
-import tkinter as tk
-from tkinter import ttk, messagebox
 from pathlib import Path
+
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+except ModuleNotFoundError:
+    import sys
+
+    if sys.stdout.isatty():
+        # Running from a terminal — show the install command
+        _groups = subprocess.run(["groups"], capture_output=True, text=True).stdout
+        _has_sudo = "sudo" in _groups or "wheel" in _groups
+
+        print("\n  Proxmox SPICE Manager requires python3-tkinter.\n")
+        if shutil.which("dnf"):
+            print("  Install it with:  sudo dnf install python3-tkinter\n")
+        elif shutil.which("apt"):
+            if _has_sudo:
+                print("  Install it with:  sudo apt install python3-tk\n")
+            else:
+                print("  Install it with:  su -c 'apt install python3-tk'\n")
+        else:
+            print("  Install the tkinter package for your distribution.\n")
+    else:
+        # Launched from desktop — open a terminal showing the message
+        _terminals = [
+            ["konsole", "-e"],
+            ["gnome-terminal", "--"],
+            ["xfce4-terminal", "-e"],
+            ["x-terminal-emulator", "-e"],
+            ["xterm", "-e"],
+        ]
+        _msg = (
+            "echo ''; "
+            "echo '  Proxmox SPICE Manager requires python3-tkinter.'; "
+            "echo '  Run this script from a terminal to see install instructions.'; "
+            "echo ''; "
+            "echo '  Press Enter to close...'; read"
+        )
+        for _term_cmd in _terminals:
+            if shutil.which(_term_cmd[0]):
+                try:
+                    subprocess.Popen(_term_cmd + ["bash", "-c", _msg]).wait()
+                    break
+                except Exception:
+                    continue
+
+    sys.exit(1)
 
 CONFIG_DIR = Path.home() / ".config" / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 
+# ─── Dependency Definitions ───────────────────────────────────────────────────
 REQUIRED_DEPS = {
     "curl": {
         "cmd": "curl",
         "desc": "HTTP client for Proxmox API calls",
-        "install": "sudo dnf install curl",
+        "pkg_dnf": "curl",
+        "pkg_apt": "curl",
     },
     "jq": {
         "cmd": "jq",
         "desc": "JSON processor",
-        "install": "sudo dnf install jq",
+        "pkg_dnf": "jq",
+        "pkg_apt": "jq",
     },
     "remote-viewer": {
         "cmd": "remote-viewer",
         "desc": "SPICE client (virt-viewer)",
-        "install": "sudo dnf install virt-viewer",
+        "pkg_dnf": "virt-viewer",
+        "pkg_apt": "virt-viewer",
     },
 }
+
+
+def _can_sudo():
+    """Check if the current user can actually use sudo (not just that it's installed)."""
+    if not shutil.which("sudo"):
+        return False
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "true"], capture_output=True, timeout=5
+        )
+        if result.returncode == 0:
+            return True
+        # Check if user is in sudo/wheel group even if no passwordless sudo
+        groups = subprocess.run(
+            ["groups"], capture_output=True, text=True, timeout=5
+        ).stdout
+        return "sudo" in groups or "wheel" in groups
+    except Exception:
+        return False
+
+
+def _elevate_prefix():
+    """Return the command prefix for privilege escalation."""
+    if _can_sudo():
+        return "sudo"
+    return "su -c"
+
+
+def detect_pkg_manager():
+    """Detect the system package manager. Returns 'dnf', 'apt', or None."""
+    if shutil.which("dnf"):
+        return "dnf"
+    elif shutil.which("apt"):
+        return "apt"
+    return None
+
+
+def get_install_cmd(dep_info):
+    """Get the install command string for a single dependency."""
+    mgr = detect_pkg_manager()
+    if not mgr:
+        return f"# Install '{dep_info['cmd']}' using your package manager"
+    pkg = dep_info[f"pkg_{mgr}"]
+    elev = _elevate_prefix()
+    if elev == "sudo":
+        return f"sudo {mgr} install {pkg}"
+    return f"su -c '{mgr} install {pkg}'"
+
+
+def get_install_all_cmd(deps, results):
+    """Get a single command string to install all missing packages, or None."""
+    mgr = detect_pkg_manager()
+    if not mgr:
+        return None
+
+    missing = [info[f"pkg_{mgr}"] for name, info in deps.items() if not results[name]]
+    if not missing:
+        return None
+
+    pkgs = " ".join(missing)
+    elev = _elevate_prefix()
+    if elev == "sudo":
+        return f"sudo {mgr} install {pkgs}"
+    return f"su -c '{mgr} install {pkgs}'"
 
 
 def check_deps():
@@ -50,6 +165,7 @@ def check_deps():
         if not found:
             all_ok = False
     return all_ok, results
+
 
 # ─── Theme Definitions ────────────────────────────────────────────────────────
 THEMES = {
@@ -100,17 +216,18 @@ THEMES = {
     },
 }
 
-# Active theme — mutable reference
+# Active theme — mutable dict updated in place on theme change
 C = dict(THEMES["Catppuccin Mocha"])
 
 
+# ─── Config Persistence ──────────────────────────────────────────────────────
 def load_config():
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE) as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            return {"clusters": [], "theme": "Catppuccin Mocha"}
+            pass
     return {"clusters": [], "theme": "Catppuccin Mocha"}
 
 
@@ -120,7 +237,9 @@ def save_config(config):
         json.dump(config, f, indent=2)
 
 
+# ─── Proxmox API Helpers ─────────────────────────────────────────────────────
 def api_request(host, endpoint, method="GET", auth=None):
+    """Make a Proxmox API request via curl. Uses -k to accept self-signed certs."""
     cmd = ["curl", "-s", "-k"]
     if auth.get("token_id") and auth.get("token_secret"):
         cmd += ["-H", f"Authorization: PVEAPIToken={auth['token_id']}={auth['token_secret']}"]
@@ -139,6 +258,7 @@ def api_request(host, endpoint, method="GET", auth=None):
 
 
 def authenticate_password(host, username, password):
+    """Authenticate with username/password, return ticket dict or None."""
     cmd = [
         "curl", "-s", "-k",
         "-d", f"username={username}",
@@ -158,8 +278,9 @@ def authenticate_password(host, username, password):
     return None
 
 
-# ─── Hover button ─────────────────────────────────────────────────────────────
+# ─── Hover Button ─────────────────────────────────────────────────────────────
 class HoverButton(tk.Button):
+    """Button with hover color change."""
     def __init__(self, master, hover_bg=None, hover_fg=None, **kw):
         self._normal_bg = kw.get("bg", C["surface0"])
         self._normal_fg = kw.get("fg", C["text"])
@@ -175,16 +296,11 @@ class HoverButton(tk.Button):
     def _on_leave(self, e):
         self.config(bg=self._normal_bg, fg=self._normal_fg)
 
-    def update_colors(self, bg, fg, hover_bg, hover_fg):
-        self._normal_bg = bg
-        self._normal_fg = fg
-        self._hover_bg = hover_bg
-        self._hover_fg = hover_fg
-        self.config(bg=bg, fg=fg, activebackground=hover_bg, activeforeground=hover_fg)
-
 
 # ─── Dialogs ─────────────────────────────────────────────────────────────────
 class ClusterDialog(tk.Toplevel):
+    """Dialog for adding or editing a cluster connection."""
+
     def __init__(self, parent, cluster=None):
         super().__init__(parent)
         self.result = None
@@ -299,6 +415,8 @@ class ClusterDialog(tk.Toplevel):
 
 
 class PasswordPrompt(tk.Toplevel):
+    """Simple password prompt for Proxmox login."""
+
     def __init__(self, parent, username, host):
         super().__init__(parent)
         self.result = None
@@ -349,6 +467,8 @@ class PasswordPrompt(tk.Toplevel):
 
 
 class IconPickerDialog(tk.Toplevel):
+    """Dialog for choosing an app icon — system icons or custom file."""
+
     SYSTEM_ICONS = [
         ("preferences-system-network", "Network Settings"),
         ("computer", "Computer"),
@@ -485,8 +605,10 @@ class PrereqDialog(tk.Toplevel):
     def __init__(self, parent, deps, results):
         super().__init__(parent)
         self.result = False
+        self.deps = deps
+        self.results = results
         self.title("Proxmox SPICE Manager — Setup")
-        self.geometry("560x520")
+        self.geometry("560x580")
         self.resizable(True, True)
         self.grab_set()
         self.configure(bg=C["base"])
@@ -506,7 +628,8 @@ class PrereqDialog(tk.Toplevel):
         tk.Label(main, text="DEPENDENCIES", bg=C["base"], fg=C["overlay0"],
                  font=("sans-serif", 8, "bold")).pack(anchor="w", pady=(0, 8))
 
-        self.dep_frames = {}
+        mgr = detect_pkg_manager()
+
         for name, info in deps.items():
             found = results[name]
             row = tk.Frame(main, bg=C["surface0"], padx=14, pady=10)
@@ -537,22 +660,28 @@ class PrereqDialog(tk.Toplevel):
                 install_frame = tk.Frame(left, bg=C["surface0"])
                 install_frame.pack(anchor="w", padx=(28, 0), pady=(4, 0))
 
-                pkg = info["install"].split()[-1]
+                install_cmd = get_install_cmd(info)
+                pkg = info.get(f"pkg_{mgr}", info["cmd"]) if mgr else info["cmd"]
                 HoverButton(install_frame, text=f"  ⬇  Install {pkg}  ",
-                            command=lambda p=pkg, n=name: self._install_pkg(p, n),
+                            command=lambda p=pkg: self._install_pkg(p),
                             bg=C["peach"], fg=C["crust"], relief="flat", padx=10, pady=3,
                             hover_bg=C["yellow"], hover_fg=C["crust"],
                             font=("sans-serif", 9, "bold")).pack(side="left")
 
-            self.dep_frames[name] = row
+                tk.Label(install_frame, text=f"  {install_cmd}",
+                         bg=C["surface0"], fg=C["overlay0"],
+                         font=("monospace", 8)).pack(side="left", padx=(8, 0))
 
-        missing = [info["install"].split()[-1] for name, info in deps.items() if not results[name]]
-        if missing:
+        all_cmd = get_install_all_cmd(deps, results)
+        if all_cmd:
             tk.Frame(main, bg=C["surface0"], height=1).pack(fill="x", pady=(12, 12))
 
-            all_pkgs = " ".join(missing)
-            HoverButton(main, text=f"  ⬇  Install All Missing ({all_pkgs})  ",
-                        command=lambda: self._install_pkg(all_pkgs, None),
+            missing_pkgs = [info.get(f"pkg_{mgr}", info["cmd"])
+                           for name, info in deps.items() if not results[name]]
+            all_pkgs_display = " ".join(missing_pkgs)
+
+            HoverButton(main, text=f"  ⬇  Install All Missing ({all_pkgs_display})  ",
+                        command=lambda: self._install_pkg(all_pkgs_display),
                         bg=C["peach"], fg=C["crust"], relief="flat", padx=14, pady=8,
                         hover_bg=C["yellow"], hover_fg=C["crust"],
                         font=("sans-serif", 10, "bold")).pack(fill="x", pady=(0, 4))
@@ -564,63 +693,149 @@ class PrereqDialog(tk.Toplevel):
         HoverButton(prereq_btn_frame, text="Quit", command=self._cancel,
                     bg=C["surface1"], fg=C["text"], relief="flat", padx=18, pady=6,
                     hover_bg=C["surface2"], font=("sans-serif", 10)).pack(side="right", padx=(8, 0))
-        HoverButton(prereq_btn_frame, text="  Re-check  ", command=lambda: self._recheck(deps),
+        HoverButton(prereq_btn_frame, text="  Re-check  ", command=lambda: self._recheck(),
                     bg=C["blue"], fg=C["crust"], relief="flat", padx=18, pady=6,
                     hover_bg=C["sapphire"], hover_fg=C["crust"],
                     font=("sans-serif", 10, "bold")).pack(side="right")
 
-        self.deps = deps
-        self.results = results
         self.wait_window()
 
-    def _copy_cmd(self, cmd):
-        self.clipboard_clear()
-        self.clipboard_append(cmd)
-        self.update()
-
-    def _install_pkg(self, packages, dep_name):
-        """Install packages by opening a terminal with dnf."""
-        pkg_list = packages.split()
-        # Try common terminal emulators in order of likelihood on Fedora KDE
+    def _launch_terminal(self, cmd):
+        """Launch a terminal emulator running the given command.
+        cmd can be a string (wrapped in bash -c) or a list of args."""
         terminals = [
             ["konsole", "-e"],
             ["gnome-terminal", "--"],
             ["xfce4-terminal", "-e"],
+            ["x-terminal-emulator", "-e"],
             ["xterm", "-e"],
         ]
+        if isinstance(cmd, str):
+            run_args = ["bash", "-c", cmd]
+        else:
+            run_args = cmd
 
-        cmd_str = f"sudo dnf install -y {' '.join(pkg_list)}; echo; echo 'Press Enter to close...'; read"
-
-        launched = False
         for term_cmd in terminals:
             if shutil.which(term_cmd[0]):
                 try:
-                    subprocess.Popen(term_cmd + ["bash", "-c", cmd_str])
-                    launched = True
-                    break
+                    subprocess.Popen(term_cmd + run_args)
+                    return True
                 except Exception:
                     continue
+        return False
 
-        if not launched:
+    def _install_pkg(self, packages):
+        """Install packages by opening a terminal with the appropriate package manager."""
+        mgr = detect_pkg_manager()
+        if not mgr:
             messagebox.showwarning(
-                "No Terminal Found",
-                f"Could not find a terminal emulator.\n\n"
-                f"Run manually:\n  sudo dnf install {' '.join(pkg_list)}",
+                "Unknown Package Manager",
+                "Could not detect dnf or apt.\n\n"
+                f"Manually install: {packages}",
                 parent=self
             )
             return
 
-        messagebox.showinfo(
-            "Installing",
-            "A terminal window has opened to install the packages.\n\n"
-            "Click Re-check when it's done.",
-            parent=self
-        )
+        # Use sudo if available and configured, otherwise fall back to su
+        elev = _elevate_prefix()
 
-    def _recheck(self, deps):
+        if elev == "sudo":
+            cmd_str = f"sudo {mgr} install {packages}; echo; echo 'Press Enter to close...'; read"
+            if not self._launch_terminal(cmd_str):
+                messagebox.showwarning(
+                    "No Terminal Found",
+                    f"Could not find a terminal emulator.\n\n"
+                    f"Run manually:\n  sudo {mgr} install {packages}",
+                    parent=self
+                )
+                return
+        else:
+            # Write a temp script so su -c quoting works properly
+            script_path = os.path.join(tempfile.gettempdir(), "proxmox-spice-install.sh")
+            with open(script_path, "w") as f:
+                f.write("#!/bin/bash\n")
+                f.write("echo ''\n")
+                f.write("echo 'Enter root password to install packages:'\n")
+                f.write("echo ''\n")
+                f.write(f"su -c 'apt install {packages}'\n")
+                f.write("echo ''\n")
+                f.write("echo 'Press Enter to close...'\n")
+                f.write("read\n")
+            os.chmod(script_path, 0o755)
+
+            if not self._launch_terminal(script_path):
+                self._show_copyable_command(
+                    f"su -c '{mgr} install {packages}'",
+                    "Could not open a terminal. Copy the command below\n"
+                    "and run it in a terminal. You will need the root password."
+                )
+                return
+
+            messagebox.showinfo(
+                "Installing",
+                "A terminal window has opened.\n"
+                "Enter the root password and approve the install.\n\n"
+                "Click Re-check when it's done.",
+                parent=self
+            )
+
+    def _show_copyable_command(self, cmd, message=""):
+        """Show a dialog with a selectable/copyable command."""
+        dlg = tk.Toplevel(self)
+        dlg.title("Install Command")
+        dlg.geometry("480x220")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.configure(bg=C["base"])
+
+        tk.Frame(dlg, bg=C["peach"], height=3).pack(fill="x")
+
+        main = tk.Frame(dlg, bg=C["base"], padx=24, pady=16)
+        main.pack(fill="both", expand=True)
+
+        if message:
+            tk.Label(main, text=message, bg=C["base"], fg=C["text"],
+                     font=("sans-serif", 10), wraplength=420, justify="left").pack(anchor="w", pady=(0, 12))
+
+        tk.Label(main, text="Command:", bg=C["base"], fg=C["subtext0"],
+                 font=("sans-serif", 9)).pack(anchor="w", pady=(0, 4))
+
+        cmd_entry = tk.Entry(main, bg=C["surface0"], fg=C["peach"], insertbackground=C["text"],
+                              relief="flat", font=("monospace", 11), highlightthickness=1,
+                              highlightcolor=C["blue"], highlightbackground=C["surface1"],
+                              readonlybackground=C["surface0"])
+        cmd_entry.insert(0, cmd)
+        cmd_entry.config(state="readonly")
+        cmd_entry.pack(fill="x", ipady=8)
+
+        btn_frame = tk.Frame(main, bg=C["base"])
+        btn_frame.pack(fill="x", pady=(12, 0))
+
+        def copy_cmd():
+            dlg.clipboard_clear()
+            dlg.clipboard_append(cmd)
+            copy_btn.config(text="  ✓ Copied  ")
+            dlg.after(1500, lambda: copy_btn.config(text="  Copy  "))
+
+        copy_btn = HoverButton(btn_frame, text="  Copy  ", command=copy_cmd,
+                    bg=C["peach"], fg=C["crust"], relief="flat", padx=14, pady=5,
+                    hover_bg=C["yellow"], hover_fg=C["crust"],
+                    font=("sans-serif", 10, "bold"))
+        copy_btn.pack(side="left")
+
+        HoverButton(btn_frame, text="  Close  ", command=dlg.destroy,
+                    bg=C["surface1"], fg=C["text"], relief="flat", padx=14, pady=5,
+                    hover_bg=C["surface2"],
+                    font=("sans-serif", 10)).pack(side="right")
+
+        cmd_entry.select_range(0, "end")
+        cmd_entry.focus_set()
+        dlg.wait_window()
+
+    def _recheck(self):
         all_ok, results = check_deps()
         self.results = results
-
         if all_ok:
             self.result = True
             self.destroy()
@@ -647,7 +862,6 @@ class ProxmoxSpiceManager(tk.Tk):
         self.minsize(800, 500)
 
         self.config_data = load_config()
-        self.vm_list = []
         self.current_cluster = None
         self.auth_cache = {}
 
@@ -658,7 +872,6 @@ class ProxmoxSpiceManager(tk.Tk):
 
         # One-time prerequisite check
         if not self.config_data.get("prereqs_ok"):
-            # Show main window briefly so dialogs can attach to it
             self.update_idletasks()
             if not self._check_prereqs():
                 self.destroy()
@@ -674,8 +887,9 @@ class ProxmoxSpiceManager(tk.Tk):
             self.current_cluster = self.config_data["clusters"][0]
             self.after(100, self._refresh_vms)
 
+    # ── Prereq checks ────────────────────────────────────────────────────────
     def _check_prereqs(self):
-        """Check for required dependencies and show a setup dialog."""
+        """Check for required dependencies and show setup dialog if missing."""
         all_ok, results = check_deps()
         if all_ok:
             return True
@@ -683,9 +897,8 @@ class ProxmoxSpiceManager(tk.Tk):
         return dlg.result
 
     def _recheck_prereqs(self):
-        """Manual prereq recheck — always shows the dialog with current status."""
+        """Manual prereq recheck from the header button."""
         all_ok, results = check_deps()
-
         if all_ok:
             messagebox.showinfo(
                 "All Good",
@@ -701,8 +914,9 @@ class ProxmoxSpiceManager(tk.Tk):
                 self.config_data["prereqs_ok"] = True
                 save_config(self.config_data)
 
+    # ── UI Construction ───────────────────────────────────────────────────────
     def _build_ui(self):
-        # Destroy existing widgets if rebuilding
+        # Destroy existing widgets if rebuilding (theme change)
         for widget in self.winfo_children():
             widget.destroy()
 
@@ -730,7 +944,7 @@ class ProxmoxSpiceManager(tk.Tk):
         HoverButton(header, text="🔍  Check Prerequisites", command=self._recheck_prereqs,
                     hover_bg=C["mantle"], hover_fg=C["text"], **header_btn).pack(side="right", padx=(0, 4))
 
-        # Theme selector in header
+        # Theme selector
         theme_frame = tk.Frame(header, bg=C["crust"])
         theme_frame.pack(side="right", padx=(0, 8))
 
@@ -745,17 +959,17 @@ class ProxmoxSpiceManager(tk.Tk):
         theme_menu.pack(side="left")
         theme_menu.bind("<<ComboboxSelected>>", self._on_theme_change)
 
-        # Style the combobox
-        combo_style = ttk.Style()
-        combo_style.theme_use("clam")
-        combo_style.configure("TCombobox",
-                               fieldbackground=C["surface0"], background=C["surface1"],
-                               foreground=C["text"], arrowcolor=C["text"],
-                               borderwidth=0, relief="flat")
-        combo_style.map("TCombobox",
-                         fieldbackground=[("readonly", C["surface0"])],
-                         foreground=[("readonly", C["text"])],
-                         background=[("readonly", C["surface1"])])
+        # Style ttk widgets
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TCombobox",
+                         fieldbackground=C["surface0"], background=C["surface1"],
+                         foreground=C["text"], arrowcolor=C["text"],
+                         borderwidth=0, relief="flat")
+        style.map("TCombobox",
+                   fieldbackground=[("readonly", C["surface0"])],
+                   foreground=[("readonly", C["text"])],
+                   background=[("readonly", C["surface1"])])
 
         # Accent line
         tk.Frame(self, bg=C["mauve"], height=2).pack(fill="x")
@@ -824,7 +1038,6 @@ class ProxmoxSpiceManager(tk.Tk):
         self.vm_tree = ttk.Treeview(table_frame, columns=columns, show="headings",
                                       selectmode="browse", height=12)
 
-        style = ttk.Style()
         style.configure("Treeview",
                          background=C["surface0"], foreground=C["text"],
                          fieldbackground=C["surface0"], rowheight=32,
@@ -879,31 +1092,31 @@ class ProxmoxSpiceManager(tk.Tk):
     # ── Theme switching ───────────────────────────────────────────────────────
     def _on_theme_change(self, event=None):
         theme_name = self.theme_var.get()
-        if theme_name in THEMES:
-            C.update(THEMES[theme_name])
-            self.config_data["theme"] = theme_name
-            save_config(self.config_data)
+        if theme_name not in THEMES:
+            return
 
-            # Remember state
-            selected_cluster_idx = None
-            sel = self.cluster_listbox.curselection()
-            if sel:
-                selected_cluster_idx = sel[0]
+        C.update(THEMES[theme_name])
+        self.config_data["theme"] = theme_name
+        save_config(self.config_data)
 
-            # Rebuild UI
-            self._build_ui()
-            self._populate_clusters()
+        # Remember selection state
+        selected_idx = None
+        sel = self.cluster_listbox.curselection()
+        if sel:
+            selected_idx = sel[0]
 
-            # Restore selection
-            if selected_cluster_idx is not None:
-                self.cluster_listbox.select_set(selected_cluster_idx)
-                clusters = self.config_data.get("clusters", [])
-                if selected_cluster_idx < len(clusters):
-                    self.current_cluster = clusters[selected_cluster_idx]
+        self._build_ui()
+        self._populate_clusters()
 
-            # Re-fetch VMs if a cluster was selected
-            if self.current_cluster:
-                self.after(100, self._refresh_vms)
+        # Restore selection
+        if selected_idx is not None:
+            self.cluster_listbox.select_set(selected_idx)
+            clusters = self.config_data.get("clusters", [])
+            if selected_idx < len(clusters):
+                self.current_cluster = clusters[selected_idx]
+
+        if self.current_cluster:
+            self.after(100, self._refresh_vms)
 
     # ── Cluster management ────────────────────────────────────────────────────
     def _populate_clusters(self):
@@ -960,28 +1173,32 @@ class ProxmoxSpiceManager(tk.Tk):
 
     # ── Auth ──────────────────────────────────────────────────────────────────
     def _get_auth(self, cluster):
+        """Get auth dict for a cluster, prompting for password if needed."""
         name = cluster["name"]
         if cluster["auth_method"] == "token":
             if cluster.get("token_id") and cluster.get("token_secret"):
                 return {"token_id": cluster["token_id"], "token_secret": cluster["token_secret"]}
-            else:
-                messagebox.showerror("Auth Error", "Token ID and Secret are required.", parent=self)
-                return None
+            messagebox.showerror("Auth Error", "Token ID and Secret are required.", parent=self)
+            return None
+
         if name in self.auth_cache:
             return self.auth_cache[name]
+
         prompt = PasswordPrompt(self, cluster.get("username", "root@pam"), cluster["host"])
         if not prompt.result:
             return None
+
         auth = authenticate_password(cluster["host"], cluster.get("username", "root@pam"), prompt.result)
         if auth:
             self.auth_cache[name] = auth
             return auth
-        else:
-            messagebox.showerror("Auth Failed", "Could not authenticate. Check credentials.", parent=self)
-            return None
+
+        messagebox.showerror("Auth Failed", "Could not authenticate. Check credentials.", parent=self)
+        return None
 
     # ── VM list ───────────────────────────────────────────────────────────────
     def _refresh_vms(self):
+        """Fetch SPICE-enabled VMs from the cluster (runs in background thread)."""
         if not self.current_cluster:
             return
         self.status_label.config(text="⏳  Loading VMs...", fg=C["yellow"])
@@ -1011,15 +1228,13 @@ class ProxmoxSpiceManager(tk.Tk):
 
             spice_vms = []
             for vm in qemu_vms:
-                vmid = vm.get("vmid", "?")
-                node = vm.get("node", "?")
                 config = api_request(
                     cluster["host"],
-                    f"/api2/json/nodes/{node}/qemu/{vmid}/config",
+                    f"/api2/json/nodes/{vm.get('node')}/qemu/{vm.get('vmid')}/config",
                     auth=auth
                 )
-                vga = config.get("data", {}).get("vga", "")
-                if "qxl" in str(vga).lower() or "spice" in str(vga).lower():
+                vga = str(config.get("data", {}).get("vga", "")).lower()
+                if "qxl" in vga or "spice" in vga:
                     spice_vms.append(vm)
 
             def update_ui():
@@ -1031,21 +1246,17 @@ class ProxmoxSpiceManager(tk.Tk):
 
                 spice_vms.sort(key=lambda v: v.get("vmid", 0))
                 for vm in spice_vms:
-                    vmid = vm.get("vmid", "?")
-                    name = vm.get("name", "unnamed")
-                    node = vm.get("node", "?")
-                    pool = vm.get("pool", "—")
                     status = vm.get("status", "?")
+                    display_status = "● running" if status == "running" else "○ stopped"
+                    tag = "running" if status == "running" else "stopped"
 
-                    if status == "running":
-                        display_status = "● running"
-                        tag = "running"
-                    else:
-                        display_status = "○ stopped"
-                        tag = "stopped"
-
-                    self.vm_tree.insert("", "end",
-                                         values=(vmid, name, node, pool, display_status), tags=(tag,))
+                    self.vm_tree.insert("", "end", values=(
+                        vm.get("vmid", "?"),
+                        vm.get("name", "unnamed"),
+                        vm.get("node", "?"),
+                        vm.get("pool", "—"),
+                        display_status,
+                    ), tags=(tag,))
 
                 self.vm_tree.tag_configure("running", foreground=C["green"])
                 self.vm_tree.tag_configure("stopped", foreground=C["overlay0"])
@@ -1056,7 +1267,7 @@ class ProxmoxSpiceManager(tk.Tk):
 
         threading.Thread(target=fetch, daemon=True).start()
 
-    # ── VM actions ────────────────────────────────────────────────────────────
+    # ── Sorting ───────────────────────────────────────────────────────────────
     def _sort_tree(self, col):
         """Sort the treeview by a column. Click again to reverse."""
         if self._tree_sort_col == col:
@@ -1066,11 +1277,8 @@ class ProxmoxSpiceManager(tk.Tk):
             self._tree_sort_asc = True
 
         columns = ("vmid", "name", "node", "pool", "status")
-        col_idx = columns.index(col)
-
         rows = [(self.vm_tree.set(iid, col), iid) for iid in self.vm_tree.get_children("")]
 
-        # Numeric sort for VMID, alpha for everything else
         if col == "vmid":
             rows.sort(key=lambda r: int(r[0]) if r[0].isdigit() else 0, reverse=not self._tree_sort_asc)
         else:
@@ -1079,13 +1287,13 @@ class ProxmoxSpiceManager(tk.Tk):
         for idx, (_, iid) in enumerate(rows):
             self.vm_tree.move(iid, "", idx)
 
-        # Update heading labels with sort indicator
         for c in columns:
             label = c.upper()
             if c == col:
                 label += "  ▲" if self._tree_sort_asc else "  ▼"
             self.vm_tree.heading(c, text=label)
 
+    # ── VM actions ────────────────────────────────────────────────────────────
     def _get_selected_vm(self):
         sel = self.vm_tree.selection()
         if not sel:
@@ -1099,6 +1307,7 @@ class ProxmoxSpiceManager(tk.Tk):
         self._launch_spice()
 
     def _launch_spice(self):
+        """Request a SPICE proxy ticket and launch remote-viewer."""
         vm = self._get_selected_vm()
         if not vm:
             messagebox.showinfo("No Selection", "Select a VM to connect to.")
@@ -1148,16 +1357,18 @@ class ProxmoxSpiceManager(tk.Tk):
                 self.after(0, lambda: self.status_label.config(
                     text=f"✓  Connected to {vm['name']} ({vm['vmid']})", fg=C["green"]))
             except FileNotFoundError:
+                mgr = detect_pkg_manager()
+                hint = f"sudo {mgr} install virt-viewer" if mgr else "Install virt-viewer"
                 self.after(0, lambda: (
                     self.status_label.config(text="✗  remote-viewer not found", fg=C["red"]),
                     messagebox.showerror("Missing Dependency",
-                                          "remote-viewer not found.\n"
-                                          "Install: sudo dnf install virt-viewer", parent=self)
+                                          f"remote-viewer not found.\n{hint}", parent=self)
                 ))
 
         threading.Thread(target=connect, daemon=True).start()
 
     def _export_desktop(self):
+        """Export a .desktop launcher for the selected VM."""
         vm = self._get_selected_vm()
         if not vm:
             messagebox.showinfo("No Selection", "Select a VM first.")
@@ -1166,17 +1377,14 @@ class ProxmoxSpiceManager(tk.Tk):
         desktop_dir = Path.home() / ".local" / "share" / "applications"
         desktop_dir.mkdir(parents=True, exist_ok=True)
 
-        script_path = Path.home() / "proxmox-spice.sh"
-        if not script_path.exists():
-            messagebox.showwarning("Script Not Found",
-                                    f"Shell script not found at {script_path}.\n"
-                                    "The .desktop file will reference it — make sure it exists.")
+        # Use the Python script as the launcher
+        script_path = Path.home() / "proxmox-spice-manager.py"
 
         filepath = desktop_dir / f"spice-vm{vm['vmid']}.desktop"
         content = (
             "[Desktop Entry]\n"
             f"Name={vm['name']} (VM {vm['vmid']})\n"
-            f"Exec={script_path} {vm['vmid']}\n"
+            f"Exec=/usr/bin/python3 {script_path}\n"
             "Icon=computer\n"
             "Type=Application\n"
             "Terminal=false\n"
@@ -1188,6 +1396,7 @@ class ProxmoxSpiceManager(tk.Tk):
         messagebox.showinfo("Exported", f"Desktop launcher saved:\n{filepath}")
 
     def _install_to_app_menu(self):
+        """Install this app to the desktop app menu with a chosen icon."""
         icon_dlg = IconPickerDialog(self)
         if icon_dlg.result is None:
             return
@@ -1198,6 +1407,7 @@ class ProxmoxSpiceManager(tk.Tk):
         desktop_dir = Path.home() / ".local" / "share" / "applications"
         desktop_file = desktop_dir / "proxmox-spice-manager.desktop"
 
+        # Copy custom icon to persistent location
         if icon_value and os.path.isfile(icon_value):
             icon_dir = CONFIG_DIR / "icons"
             icon_dir.mkdir(parents=True, exist_ok=True)
@@ -1210,6 +1420,7 @@ class ProxmoxSpiceManager(tk.Tk):
                 messagebox.showerror("Icon Error", f"Could not copy icon:\n{e}", parent=self)
                 return
 
+        # Copy script to home directory
         current_script = Path(os.path.abspath(__file__))
         try:
             if current_script.resolve() != installed_script.resolve():
@@ -1219,6 +1430,7 @@ class ProxmoxSpiceManager(tk.Tk):
             messagebox.showerror("Install Failed", f"Could not copy script:\n{e}", parent=self)
             return
 
+        # Create .desktop entry
         desktop_dir.mkdir(parents=True, exist_ok=True)
         content = (
             "[Desktop Entry]\n"
