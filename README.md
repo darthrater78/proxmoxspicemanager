@@ -13,7 +13,7 @@ Download the script to a location of your choosing, then make it executable:
 ```bash
 chmod +x proxmox-spice-manager.py
 ```
-
+**FEDORA** <br>
 Run the script. A prerequisite check should appear on first launch.
 
 <img width="665" height="579" alt="image" src="https://github.com/user-attachments/assets/51df513d-68b8-412e-a8c7-de87e238b8ff" />
@@ -30,7 +30,22 @@ After the recheck completes, the window will close and the app should pop up. To
 
 You can then search for it and pin it to your taskbar.
 
-<img width="672" height="162" alt="image" src="https://github.com/user-attachments/assets/c94002fd-3258-4252-ae0e-768e198c29a3" />
+<img width="672" height="162" alt="image" src="https://github.com/user-attachments/assets/c94002fd-3258-4252-ae0e-768e198c29a3" /> <br>
+
+**DEBIAN** <br>
+
+Debian desktop doesn't include the user in sudoers by default so the logic changes a bit. <br>
+Running the script directly will provide this error: <br>
+<img width="660" height="173" alt="image" src="https://github.com/user-attachments/assets/937ac173-666f-4928-88ff-bd3cc95ea283" /> <br>
+
+
+<img width="518" height="83" alt="image" src="https://github.com/user-attachments/assets/50bd7ec1-5db4-497b-806e-159746a3510c" /> 
+Install the file, and then run the script again. <br>
+
+You'll then get the setup install screen to whatever else may be missing.
+<img width="1029" height="625" alt="image" src="https://github.com/user-attachments/assets/86a3141d-2cb4-4c6b-9e8a-aeddc30a5400" />
+
+
 
 ---
 
