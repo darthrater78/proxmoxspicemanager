@@ -59,7 +59,7 @@ From the Datacenter section, go to **Users** and create a new user. Use the **Pr
 
 ### Role
 
-Create a minimal role with only the permissions that are needed. Create a new role and select **VM.Audit**, **Pool.Audit**, and **VM.Console**.
+Create a minimal role with only the permissions that are needed. Create a new role and select `VM.PowerMgmt` `VM.Audit` `VM.Snapshot.Rollback` `VM.Console` `Pool.Audit` `VM.Snapshot`
 
 <img width="412" height="161" alt="image" src="https://github.com/user-attachments/assets/6bb496db-c912-40e2-bf56-492bed073d0e" />
 
