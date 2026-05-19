@@ -1,3 +1,6 @@
+NOTE: The Windows client can be found under the files section on the main page. 
+
+
 # Proxmox Spice Manager
 
 A utility for accessing SPICE consoles via API or password.
