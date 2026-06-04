@@ -58,9 +58,12 @@ No `pip install` required — the Windows edition uses only the Python standard 
 
 ## Getting Started
 
-1. **Configure Proxmox** — create a user, role, API token, and set up your VMs → [proxmox-setup.md](proxmox-setup.md)
-2. **Linux** — run `proxmox-spice-manager.py` (Fedora/Debian walkthrough with screenshots) → [linux-setup.md](linux-setup.md)
-3. **Windows** — download `Proxmox SPICE Manager.exe` from [Releases](../../releases), or run `proxmox-spice-manager-win.py` from source → [build-windows.md](build-windows.md)
+> [!IMPORTANT]
+> **Step 1 — Configure Proxmox first:** create a user, role, API token, and set up your VMs → [proxmox-setup.md](proxmox-setup.md)
+>
+> **Then install the app for your platform:**
+> - **Linux** — run `proxmox-spice-manager.py` (Fedora/Debian walkthrough with screenshots) → [linux-setup.md](linux-setup.md)
+> - **Windows** — download `Proxmox SPICE Manager.exe` from [Releases](../../releases), or run `proxmox-spice-manager-win.py` from source → [build-windows.md](build-windows.md)
 
 ## Configuration
 
