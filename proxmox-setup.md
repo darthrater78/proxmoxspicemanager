@@ -55,7 +55,7 @@ Choose the cluster and hit **Refresh**. Any VM with the display set to SPICE wil
 
 <img width="998" height="674" alt="image" src="https://github.com/user-attachments/assets/3bd7169e-c7b1-4a5c-b9fc-ab7dd83d19fd" />
 
-You can launch console sessions from here or export them to the desktop in the same way you installed the app.
+You can launch console sessions directly from the app, or on Linux you can export individual VM sessions as desktop shortcuts to launch them without opening the app.
 
 <img width="788" height="279" alt="image" src="https://github.com/user-attachments/assets/58c46e71-edba-4821-a977-2c527bbc138d" />
 

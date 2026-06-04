@@ -44,7 +44,7 @@ Running the script directly will provide this error:
 
 <img width="518" height="83" alt="image" src="https://github.com/user-attachments/assets/50bd7ec1-5db4-497b-806e-159746a3510c" />
 
-Install the file, and then run the script again.
+The app will display the exact install command it needs — copy it, run it in your terminal, then run the script again.
 
 You'll then get the setup install screen for whatever else may be missing.
 

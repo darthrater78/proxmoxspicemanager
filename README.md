@@ -20,10 +20,6 @@ A desktop GUI application for managing and launching SPICE console sessions to P
 - **App menu integration** — install as a desktop app (Linux: `.desktop` file; Windows: Start Menu shortcut)
 - **Prerequisite checker** — first-run dialog detects missing dependencies and helps you install them
 
-## Screenshots
-
-The app uses a themed tkinter interface with a sidebar for cluster selection and a main table showing SPICE-enabled VMs with status indicators, snapshot counts, and pool membership.
-
 ## Requirements
 
 ### Both Platforms
@@ -60,103 +56,13 @@ sudo apt install python3-tk python3-keyring virt-viewer
 
 No `pip install` required — the Windows edition uses only the Python standard library plus Windows DPAPI for encryption.
 
-## Installation
+## Getting Started
 
-### Linux — Run from source
+1. **[proxmox-setup.md](proxmox-setup.md)** — Configure Proxmox first: create a user, role, API token, and set up your VMs for SPICE
+2. **[linux-setup.md](linux-setup.md)** — Install and run on Linux (Fedora/Debian walkthrough with screenshots)
+3. **[build-windows.md](build-windows.md)** — Run from source or build a standalone `.exe` on Windows
 
-```bash
-# Download
-curl -O proxmox-spice-manager.py
-
-# Make executable
-chmod +x proxmox-spice-manager.py
-
-# Run
-./proxmox-spice-manager.py
-```
-
-Use **File → Install to App Menu** inside the app to create a `.desktop` entry with an icon of your choice.
-
-See [linux-setup.md](linux-setup.md) for a full walkthrough with screenshots, then [proxmox-setup.md](proxmox-setup.md) to configure your connection.
-
-### Windows — Run from source
-
-```powershell
-python proxmox-spice-manager-win.py
-```
-
-### Windows — Prebuilt executable
-
-Download `Proxmox SPICE Manager.exe` from the [Releases](../../releases) page. virt-viewer must still be installed separately — the app will prompt you on first launch.
-
-### Windows — Build your own .exe
-
-See [build-windows.md](build-windows.md) for full instructions.
-
-Once the app is running, see [proxmox-setup.md](proxmox-setup.md) to configure your Proxmox connection.
-
-## Proxmox Setup
-
-### Authentication
-
-The app supports two authentication methods:
-
-- **API Token** (recommended) — create a dedicated token in the Proxmox UI under Datacenter → Permissions → API Tokens. The token secret is stored encrypted (keyring on Linux, DPAPI on Windows).
-- **Password** — prompted on each session. Not stored to disk.
-
-### Required Permissions
-
-Create a role or use `PVEVMUser` with the following privileges:
-
-| Privilege | Purpose |
-|---|---|
-| `VM.Console` | Launch SPICE sessions |
-| `VM.PowerMgmt` | Start, shutdown, stop VMs |
-| `VM.Snapshot` | Create and delete snapshots |
-| `VM.Snapshot.Rollback` | Rollback to snapshots |
-| `Pool.Audit` | Show resource pool membership |
-| `Sys.Audit` | List VMs across cluster nodes |
-
-Example setup using the Proxmox CLI:
-
-```bash
-# Create a user
-pveum useradd spice@pve -comment "SPICE Manager"
-
-# Create an API token (disable privilege separation for simplicity)
-pveum user token add spice@pve spice-token -privsep 0
-
-# Assign the PVEVMUser role at the root level
-pveum aclmod / -user spice@pve -role PVEVMUser
-```
-
-### VM Configuration
-
-> **SPICE is for graphical (GUI) operating systems only.** Headless or CLI-only VMs won't benefit from a SPICE console — use SSH for those instead.
-
-VMs must have a **QXL display adapter** to appear in the app:
-
-1. In the Proxmox web UI, select your VM → Hardware → Display
-2. Set the display to **SPICE (qxl)**
-
-#### Guest drivers (required for a working SPICE session)
-
-SPICE sessions will open but won't function correctly without the proper guest drivers installed inside the VM.
-
-**Windows guests** — install both:
-- **VirtIO drivers** — covers storage, network, and other paravirtualized devices. Download the ISO from the [Fedora VirtIO project](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso) and run `virtio-win-guest-tools.exe` inside the VM.
-- **SPICE guest tools** — enables display resizing, clipboard sharing, and mouse integration. Download from [spice-space.org](https://www.spice-space.org/download.html).
-
-**Linux guests** — install `spice-vdagent` for clipboard sharing and display resizing:
-```bash
-# Fedora
-sudo dnf install spice-vdagent
-
-# Debian/Ubuntu
-sudo apt install spice-vdagent
-```
-
-Only VMs with QXL/SPICE displays are shown — non-SPICE VMs are filtered out automatically.
+Windows users can also grab the prebuilt `Proxmox SPICE Manager.exe` directly from the [Releases](../../releases) page.
 
 ## Configuration
 
@@ -193,7 +99,7 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 
 | Problem | Solution |
 |---|---|
-| No VMs appear after connecting | Verify your API token has `Sys.Audit` permission and that VMs use QXL display |
+| No VMs appear after connecting | Verify your API token has `VM.Audit` permission and that VMs use QXL display |
 | "Token secret not found" error | Re-edit the cluster and re-enter the token secret |
 | SPICE window opens but is black | Install `spice-vdagent` and a QXL driver inside the guest VM |
 | remote-viewer not found (Windows) | Install virt-viewer from [spice-space.org](https://www.spice-space.org/download.html) and restart the app |
