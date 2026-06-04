@@ -186,10 +186,6 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 ## Tips
 
 - **Clipboard sharing** requires `spice-vdagent` running inside the guest VM with a graphical session (not a raw TTY). For CLI-only VMs, use SSH for copy/paste.
-- **Disable screen blanking** inside VMs to prevent DPMS timeouts during SPICE sessions:
-  ```bash
-  xset s off && xset -dpms && xset s noblank
-  ```
 - **ACPI Shutdown** sends a graceful shutdown signal — the guest OS must handle ACPI events. **Force Stop** kills the QEMU process immediately (unsaved data will be lost).
 - **Polling** — after power or snapshot actions, the app polls every 10 seconds (up to 2 minutes) for state changes, then refreshes the VM list.
 
