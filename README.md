@@ -77,7 +77,7 @@ chmod +x proxmox-spice-manager.py
 
 Use **File → Install to App Menu** inside the app to create a `.desktop` entry with an icon of your choice.
 
-See [linux-setup.md](linux-setup.md) for a full walkthrough with screenshots.
+See [linux-setup.md](linux-setup.md) for a full walkthrough with screenshots, then [proxmox-setup.md](proxmox-setup.md) to configure your connection.
 
 ### Windows — Run from source
 
@@ -92,6 +92,8 @@ Download `Proxmox SPICE Manager.exe` from the [Releases](../../releases) page. v
 ### Windows — Build your own .exe
 
 See [build-windows.md](build-windows.md) for full instructions.
+
+Once the app is running, see [proxmox-setup.md](proxmox-setup.md) to configure your Proxmox connection.
 
 ## Proxmox Setup
 
@@ -130,11 +132,29 @@ pveum aclmod / -user spice@pve -role PVEVMUser
 
 ### VM Configuration
 
+> **SPICE is for graphical (GUI) operating systems only.** Headless or CLI-only VMs won't benefit from a SPICE console — use SSH for those instead.
+
 VMs must have a **QXL display adapter** to appear in the app:
 
 1. In the Proxmox web UI, select your VM → Hardware → Display
 2. Set the display to **SPICE (qxl)**
-3. Inside the VM, install `spice-vdagent` for clipboard sharing (Linux guests) or the [SPICE guest tools](https://www.spice-space.org/download.html) (Windows guests)
+
+#### Guest drivers (required for a working SPICE session)
+
+SPICE sessions will open but won't function correctly without the proper guest drivers installed inside the VM.
+
+**Windows guests** — install both:
+- **VirtIO drivers** — covers storage, network, and other paravirtualized devices. Download the ISO from the [Fedora VirtIO project](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso) and run `virtio-win-guest-tools.exe` inside the VM.
+- **SPICE guest tools** — enables display resizing, clipboard sharing, and mouse integration. Download from [spice-space.org](https://www.spice-space.org/download.html).
+
+**Linux guests** — install `spice-vdagent` for clipboard sharing and display resizing:
+```bash
+# Fedora
+sudo dnf install spice-vdagent
+
+# Debian/Ubuntu
+sudo apt install spice-vdagent
+```
 
 Only VMs with QXL/SPICE displays are shown — non-SPICE VMs are filtered out automatically.
 
@@ -189,6 +209,7 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 proxmox-spice-manager.py        # Linux edition (single file)
 proxmox-spice-manager-win.py    # Windows edition (single file)
 README.md                       # This file
+proxmox-setup.md                # Proxmox server config and app setup (all platforms)
 linux-setup.md                  # Linux installation walkthrough with screenshots
 build-windows.md                # Instructions for building a standalone Windows .exe
 ```
