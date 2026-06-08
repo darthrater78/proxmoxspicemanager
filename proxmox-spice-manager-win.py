@@ -42,7 +42,7 @@ APPDATA = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
 CONFIG_DIR = APPDATA / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.1.2-win"
+APP_VERSION = "2.1.3-win"
 
 VIRT_VIEWER_DOWNLOAD = "https://www.spice-space.org/download.html"
 
@@ -84,8 +84,8 @@ def _find_remote_viewer():
                         return str(candidate)
                 except (FileNotFoundError, OSError):
                     continue
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[debug] find_remote_viewer failed: {e}", file=sys.stderr)
 
     return None
 
@@ -283,8 +283,8 @@ def migrate_secrets(config):
             if secret:
                 try:
                     cluster["token_secret_enc"] = _dpapi_encrypt(secret)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[debug] migrate_secrets encrypt failed: {e}", file=sys.stderr)
             del cluster["token_secret"]
             changed = True
     if changed:
@@ -292,10 +292,13 @@ def migrate_secrets(config):
 
 
 # ─── Proxmox API Helpers ─────────────────────────────────────────────────────
-def _get_ssl_context():
+def _get_ssl_context(skip_tls_verify=False):
+    """Create an SSL context. Verifies certs by default; pass skip_tls_verify=True
+    for clusters using self-signed certificates."""
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if skip_tls_verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
 
@@ -319,7 +322,9 @@ def api_request(host, endpoint, method="GET", auth=None, data=None):
 
     try:
         with urllib.request.urlopen(
-            req, data=data, context=_get_ssl_context(), timeout=15
+            req, data=data,
+            context=_get_ssl_context(auth.get("skip_tls_verify", False) if auth else False),
+            timeout=15,
         ) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
@@ -336,7 +341,7 @@ def api_request(host, endpoint, method="GET", auth=None, data=None):
         return {"error": str(e)}
 
 
-def authenticate_password(host, username, password):
+def authenticate_password(host, username, password, skip_tls_verify=False):
     url = f"{host}/api2/json/access/ticket"
     data = urllib.parse.urlencode(
         {"username": username, "password": password}
@@ -345,7 +350,7 @@ def authenticate_password(host, username, password):
 
     try:
         with urllib.request.urlopen(
-            req, context=_get_ssl_context(), timeout=15
+            req, context=_get_ssl_context(skip_tls_verify), timeout=15
         ) as response:
             res_data = json.loads(response.read().decode("utf-8"))
             if res_data.get("data", {}).get("ticket"):
@@ -353,8 +358,8 @@ def authenticate_password(host, username, password):
                     "ticket": res_data["data"]["ticket"],
                     "csrf": res_data["data"].get("CSRFPreventionToken", ""),
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[debug] authenticate_password failed: {e}", file=sys.stderr)
     return None
 
 
@@ -385,7 +390,7 @@ class ClusterDialog(tk.Toplevel):
         self.original_name = cluster.get("name") if cluster else None
 
         self.title("Edit Cluster" if cluster else "Add Cluster")
-        self.geometry("500x480")
+        self.geometry("500x510")
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
@@ -414,14 +419,23 @@ class ClusterDialog(tk.Toplevel):
             main, text="HOST URL (e.g. https://192.168.1.100:8006)", **lbl
         ).grid(row=2, column=0, sticky="w", pady=(0, 4))
         self.host_entry = tk.Entry(main, **entry_cfg)
-        self.host_entry.grid(row=3, column=0, sticky="ew", pady=(0, 16), ipady=6)
+        self.host_entry.grid(row=3, column=0, sticky="ew", pady=(0, 8), ipady=6)
+
+        self.skip_tls_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            main, text="Skip TLS verification (self-signed certificate)",
+            variable=self.skip_tls_var,
+            bg=C["base"], fg=C["subtext0"], selectcolor=C["surface0"],
+            activebackground=C["base"], activeforeground=C["text"],
+            font=("Segoe UI", 9),
+        ).grid(row=4, column=0, sticky="w", pady=(0, 12))
 
         tk.Label(main, text="AUTHENTICATION", **lbl).grid(
-            row=4, column=0, sticky="w", pady=(0, 4)
+            row=5, column=0, sticky="w", pady=(0, 4)
         )
         self.auth_var = tk.StringVar(value="token")
         auth_frame = tk.Frame(main, bg=C["base"])
-        auth_frame.grid(row=5, column=0, sticky="w", pady=(0, 12))
+        auth_frame.grid(row=6, column=0, sticky="w", pady=(0, 12))
 
         radio_cfg = {
             "bg": C["base"], "fg": C["text"], "selectcolor": C["surface0"],
@@ -438,7 +452,7 @@ class ClusterDialog(tk.Toplevel):
         ).pack(side="left")
 
         self.token_frame = tk.Frame(main, bg=C["base"])
-        self.token_frame.grid(row=6, column=0, sticky="ew")
+        self.token_frame.grid(row=7, column=0, sticky="ew")
         self.token_frame.columnconfigure(0, weight=1)
 
         tk.Label(
@@ -465,7 +479,7 @@ class ClusterDialog(tk.Toplevel):
         self.user_entry.insert(0, "root@pam")
 
         btn_frame = tk.Frame(main, bg=C["base"])
-        btn_frame.grid(row=7, column=0, sticky="e", pady=(20, 0))
+        btn_frame.grid(row=8, column=0, sticky="e", pady=(20, 0))
 
         HoverButton(
             btn_frame, text="Cancel", command=self.destroy,
@@ -482,6 +496,7 @@ class ClusterDialog(tk.Toplevel):
         if cluster:
             self.name_entry.insert(0, cluster.get("name", ""))
             self.host_entry.insert(0, cluster.get("host", ""))
+            self.skip_tls_var.set(cluster.get("skip_tls_verify", False))
             self.auth_var.set(cluster.get("auth_method", "token"))
             self.token_id_entry.insert(0, cluster.get("token_id", ""))
             secret = get_secret(self.original_name, self.config_data)
@@ -499,10 +514,10 @@ class ClusterDialog(tk.Toplevel):
     def _toggle_auth(self):
         if self.auth_var.get() == "token":
             self.pass_frame.grid_forget()
-            self.token_frame.grid(row=6, column=0, sticky="ew")
+            self.token_frame.grid(row=7, column=0, sticky="ew")
         else:
             self.token_frame.grid_forget()
-            self.pass_frame.grid(row=6, column=0, sticky="ew")
+            self.pass_frame.grid(row=7, column=0, sticky="ew")
 
     def _save(self):
         name = self.name_entry.get().strip()
@@ -527,6 +542,7 @@ class ClusterDialog(tk.Toplevel):
             "name": name, "host": host, "auth_method": auth_method,
             "token_id": self.token_id_entry.get().strip(),
             "username": self.user_entry.get().strip(),
+            "skip_tls_verify": self.skip_tls_var.get(),
         }
         self.destroy()
 
@@ -1596,11 +1612,14 @@ class ProxmoxSpiceManager(tk.Tk):
     # ── Auth ──────────────────────────────────────────────────────────────────
     def _get_auth(self, cluster):
         name = cluster["name"]
+        skip_tls = cluster.get("skip_tls_verify", False)
+
         if cluster["auth_method"] == "token":
             token_id = cluster.get("token_id")
             token_secret = get_secret(name, self.config_data)
             if token_id and token_secret:
-                return {"token_id": token_id, "token_secret": token_secret}
+                return {"token_id": token_id, "token_secret": token_secret,
+                        "skip_tls_verify": skip_tls}
             messagebox.showerror("Auth Error", "Token secret not found or could not be decrypted.", parent=self)
             return None
 
@@ -1611,8 +1630,12 @@ class ProxmoxSpiceManager(tk.Tk):
         if not prompt.result:
             return None
 
-        auth = authenticate_password(cluster["host"], cluster.get("username", "root@pam"), prompt.result)
+        auth = authenticate_password(
+            cluster["host"], cluster.get("username", "root@pam"), prompt.result,
+            skip_tls_verify=skip_tls,
+        )
         if auth:
+            auth["skip_tls_verify"] = skip_tls
             self.auth_cache[name] = auth
             return auth
 
