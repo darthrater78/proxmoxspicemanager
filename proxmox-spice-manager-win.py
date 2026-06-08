@@ -42,7 +42,7 @@ APPDATA = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
 CONFIG_DIR = APPDATA / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.1.1-win"
+APP_VERSION = "2.1.2-win"
 
 VIRT_VIEWER_DOWNLOAD = "https://www.spice-space.org/download.html"
 
