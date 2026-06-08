@@ -219,7 +219,7 @@ def _dpapi_decrypt(b64_ciphertext: str) -> str:
 def load_config():
     if CONFIG_FILE.exists():
         try:
-            with open(CONFIG_FILE) as f:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
                 data = json.load(f)
                 if "version" not in data:
                     data["version"] = APP_VERSION
@@ -232,7 +232,7 @@ def load_config():
 def save_config(config):
     config["version"] = APP_VERSION
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
 
@@ -246,7 +246,8 @@ def save_secret(cluster_name, secret, config):
                 break
         save_config(config)
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[debug] save_secret failed: {e}", file=sys.stderr)
         return False
 
 
@@ -258,7 +259,8 @@ def get_secret(cluster_name, config):
             if enc:
                 try:
                     return _dpapi_decrypt(enc)
-                except Exception:
+                except Exception as e:
+                    print(f"[debug] get_secret decrypt failed: {e}", file=sys.stderr)
                     return None
     return None
 
@@ -1555,7 +1557,7 @@ class ProxmoxSpiceManager(tk.Tk):
                 # Don't export the encrypted blob
                 cluster.pop("token_secret_enc", None)
         try:
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, indent=2)
             messagebox.showinfo("Exported", f"Saved to:\n{path}", parent=self)
         except Exception as e:
@@ -1566,7 +1568,7 @@ class ProxmoxSpiceManager(tk.Tk):
         if not path:
             return
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 imported = json.load(f)
         except Exception as e:
             messagebox.showerror("Import Failed", str(e), parent=self)
@@ -1867,10 +1869,12 @@ class ProxmoxSpiceManager(tk.Tk):
                 ))
                 return
 
+            vv_path = None
             try:
                 with tempfile.NamedTemporaryFile(
                     mode="w", prefix="proxmox-spice-", suffix=".vv",
                     delete=False, dir=tempfile.gettempdir(),
+                    encoding="utf-8",
                 ) as f:
                     vv_path = f.name
                     f.write("[virt-viewer]\n")
@@ -1883,6 +1887,12 @@ class ProxmoxSpiceManager(tk.Tk):
                     text=f"Connected to {vm['name']} ({vm['vmid']})", fg=C["green"]
                 ))
             except Exception as e:
+                # Clean up .vv file (contains SPICE password) if launch failed
+                if vv_path:
+                    try:
+                        os.unlink(vv_path)
+                    except OSError:
+                        pass
                 self.after(0, lambda: messagebox.showerror("Launch Error", str(e), parent=self))
 
         threading.Thread(target=connect, daemon=True).start()
@@ -2063,19 +2073,25 @@ class ProxmoxSpiceManager(tk.Tk):
             shortcut_path = start_menu / "Proxmox SPICE Manager.lnk"
             script_path = Path(os.path.abspath(__file__))
 
-            # Use PowerShell to create .lnk (no COM dependency needed)
-            ps_cmd = (
-                f'$ws = New-Object -ComObject WScript.Shell; '
-                f'$s = $ws.CreateShortcut("{shortcut_path}"); '
-                f'$s.TargetPath = "{sys.executable}"; '
-                f'$s.Arguments = \'"{script_path}"\'; '
-                f'$s.WorkingDirectory = "{script_path.parent}"; '
-                f'$s.Description = "Proxmox SPICE Connection Manager"; '
-                f'$s.Save()'
-            )
+            # Use PowerShell to create .lnk — encode as base64 to safely
+            # handle paths containing spaces, quotes, or special characters.
+            ps_script = "\n".join([
+                f'$sc = "{shortcut_path}"',
+                f'$exe = "{sys.executable}"',
+                f'$args = \'"{script_path}"\'',
+                f'$dir = "{script_path.parent}"',
+                '$ws = New-Object -ComObject WScript.Shell',
+                '$s = $ws.CreateShortcut($sc)',
+                '$s.TargetPath = $exe',
+                '$s.Arguments = $args',
+                '$s.WorkingDirectory = $dir',
+                '$s.Description = "Proxmox SPICE Connection Manager"',
+                '$s.Save()',
+            ])
+            encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
 
             subprocess.run(
-                ["powershell", "-Command", ps_cmd],
+                ["powershell", "-EncodedCommand", encoded],
                 capture_output=True, timeout=10,
             )
 

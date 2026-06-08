@@ -208,7 +208,7 @@ def check_deps():
 def load_config():
     if CONFIG_FILE.exists():
         try:
-            with open(CONFIG_FILE) as f:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
                 data = json.load(f)
                 if "version" not in data:
                     data["version"] = APP_VERSION
@@ -223,7 +223,7 @@ def save_config(config):
     config["version"] = APP_VERSION
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     os.chmod(CONFIG_DIR, 0o700)
-    with open(CONFIG_FILE, "w") as f:
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
     os.chmod(CONFIG_FILE, 0o600)
 
@@ -234,7 +234,9 @@ def save_secret(cluster_name, secret):
         import keyring
         keyring.set_password(APP_ID, cluster_name, secret)
         return True
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[debug] save_secret failed: {e}", file=sys.stderr)
         return False
 
 
@@ -243,7 +245,9 @@ def get_secret(cluster_name):
     try:
         import keyring
         return keyring.get_password(APP_ID, cluster_name)
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[debug] get_secret failed: {e}", file=sys.stderr)
         return None
 
 
@@ -908,7 +912,7 @@ class PrereqDialog(tk.Toplevel):
             script_path = os.path.join(
                 tempfile.gettempdir(), "proxmox-spice-install.sh"
             )
-            with open(script_path, "w") as f:
+            with open(script_path, "w", encoding="utf-8") as f:
                 f.write("#!/bin/bash\n")
                 f.write("echo ''\necho 'Enter root password:'\necho ''\n")
                 f.write(f"su -c '{mgr} install {packages}'\n")
@@ -1793,7 +1797,7 @@ class ProxmoxSpiceManager(tk.Tk):
                     cluster["token_secret"] = secret
 
         try:
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, indent=2)
             os.chmod(path, 0o600)
             messagebox.showinfo(
@@ -1810,7 +1814,7 @@ class ProxmoxSpiceManager(tk.Tk):
             return
 
         try:
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 imported_data = json.load(f)
         except Exception as e:
             messagebox.showerror(
@@ -2274,10 +2278,11 @@ class ProxmoxSpiceManager(tk.Tk):
                 ))
                 return
 
+            vv_path = None
             try:
                 with tempfile.NamedTemporaryFile(
                     mode="w", prefix="proxmox-spice-", suffix=".vv",
-                    delete=False,
+                    delete=False, encoding="utf-8",
                 ) as f:
                     vv_path = f.name
                     f.write("[virt-viewer]\n")
@@ -2299,6 +2304,12 @@ class ProxmoxSpiceManager(tk.Tk):
                     fg=C["green"],
                 ))
             except FileNotFoundError:
+                # Clean up .vv file (contains SPICE password) if launch failed
+                if vv_path:
+                    try:
+                        os.unlink(vv_path)
+                    except OSError:
+                        pass
                 mgr = detect_pkg_manager()
                 hint = (
                     f"sudo {mgr} install virt-viewer"
@@ -2739,7 +2750,7 @@ class ProxmoxSpiceManager(tk.Tk):
             "to Proxmox VMs\n"
         )
         try:
-            with open(desktop_file, "w") as f:
+            with open(desktop_file, "w", encoding="utf-8") as f:
                 f.write(content)
             os.chmod(desktop_file, 0o755)
         except Exception as e:
