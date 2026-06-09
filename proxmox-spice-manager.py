@@ -75,7 +75,7 @@ except ModuleNotFoundError:
 CONFIG_DIR = Path.home() / ".config" / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.1.3"
+APP_VERSION = "2.1.4"
 
 # Resolve icon path — works both from source and when frozen by PyInstaller
 _BASE_DIR = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
