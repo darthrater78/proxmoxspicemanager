@@ -44,6 +44,10 @@ CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
 APP_VERSION = "2.1.3-win"
 
+# Resolve icon path — works both from source and when frozen by PyInstaller
+_BASE_DIR = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
+ICON_PATH = _BASE_DIR / "icon.ico"
+
 VIRT_VIEWER_DOWNLOAD = "https://www.spice-space.org/download.html"
 
 # Common virt-viewer install locations on Windows
@@ -1090,6 +1094,10 @@ class ProxmoxSpiceManager(tk.Tk):
         self.geometry("1100x640")
         self.configure(bg=C["base"])
         self.minsize(900, 500)
+        try:
+            self.iconbitmap(str(ICON_PATH))
+        except Exception:
+            pass
 
         self.config_data = load_config()
         self.current_cluster = None
