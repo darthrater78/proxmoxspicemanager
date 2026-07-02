@@ -9,11 +9,12 @@ Dependencies: python3-tkinter, python3-keyring, remote-viewer (virt-viewer)
 Install on Fedora:  sudo dnf install python3-tkinter python3-keyring virt-viewer
 Install on Debian:  sudo apt install python3-tk python3-keyring virt-viewer
 
-VERSION 2.1.1
+VERSION 2.2.0
 """
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -75,7 +76,7 @@ except ModuleNotFoundError:
 CONFIG_DIR = Path.home() / ".config" / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.1.4"
+APP_VERSION = "2.2.0"
 
 # Resolve icon path — works both from source and when frozen by PyInstaller
 _BASE_DIR = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
@@ -240,7 +241,7 @@ def save_secret(cluster_name, secret):
         return True
     except Exception as e:
         import sys
-        print(f"[debug] save_secret failed: {e}", file=sys.stderr)
+        print(f"[debug] save_secret failed: {type(e).__name__}", file=sys.stderr)
         return False
 
 
@@ -251,7 +252,7 @@ def get_secret(cluster_name):
         return keyring.get_password(APP_ID, cluster_name)
     except Exception as e:
         import sys
-        print(f"[debug] get_secret failed: {e}", file=sys.stderr)
+        print(f"[debug] get_secret failed: {type(e).__name__}", file=sys.stderr)
         return None
 
 
@@ -261,7 +262,7 @@ def delete_secret(cluster_name):
         import keyring
         keyring.delete_password(APP_ID, cluster_name)
     except Exception as e:
-        print(f"[debug] delete_secret failed: {e}", file=sys.stderr)
+        print(f"[debug] delete_secret failed: {type(e).__name__}", file=sys.stderr)
 
 
 def migrate_secrets(config):
@@ -304,6 +305,8 @@ def _get_ssl_context(skip_tls_verify=False):
 def api_request(host, endpoint, method="GET", auth=None, data=None):
     """Make a Proxmox API request via urllib.
     Returns dict with either response data or an 'error' key."""
+    if not host.startswith("https://"):
+        return {"error": "Host must use https://"}
     url = f"{host}{endpoint}"
     req = urllib.request.Request(url, method=method)
 
@@ -363,7 +366,8 @@ def authenticate_password(host, username, password, skip_tls_verify=False):
                     "csrf": res_data["data"].get("CSRFPreventionToken", ""),
                 }
     except Exception as e:
-        print(f"[debug] authenticate_password failed: {e}", file=sys.stderr)
+        print(f"[debug] authenticate_password failed: {type(e).__name__}",
+              file=sys.stderr)
     return None
 
 
@@ -845,7 +849,7 @@ class PrereqDialog(tk.Toplevel):
 
                 HoverButton(
                     install_frame, text=f"  ⬇  Install {pkg}  ",
-                    command=lambda p=pkg: self._install_pkg(p),
+                    command=lambda p=[pkg]: self._install_pkg(p),
                     bg=C["peach"], fg=C["crust"], relief="flat", padx=10, pady=3,
                     hover_bg=C["yellow"], hover_fg=C["crust"],
                     font=("sans-serif", 9, "bold"),
@@ -860,11 +864,10 @@ class PrereqDialog(tk.Toplevel):
             tk.Frame(main, bg=C["surface0"], height=1).pack(
                 fill="x", pady=(12, 12)
             )
-            all_pkgs_str = " ".join(missing_pkgs)
             HoverButton(
                 main,
                 text=f"  ⬇  Install All Missing ({len(missing_pkgs)})  ",
-                command=lambda p=all_pkgs_str: self._install_pkg(p),
+                command=lambda p=list(missing_pkgs): self._install_pkg(p),
                 bg=C["peach"], fg=C["crust"], relief="flat", padx=14, pady=8,
                 hover_bg=C["yellow"], hover_fg=C["crust"],
                 font=("sans-serif", 10, "bold"),
@@ -909,36 +912,40 @@ class PrereqDialog(tk.Toplevel):
         if not mgr:
             messagebox.showwarning(
                 "Unknown Package Manager",
-                f"Could not detect dnf or apt.\n\nManually install: {packages}",
+                f"Could not detect dnf or apt.\n\n"
+                f"Manually install: {' '.join(packages)}",
                 parent=self,
             )
             return
 
+        safe_pkgs = " ".join(shlex.quote(p) for p in packages)
         elev = _elevate_prefix()
         if elev == "sudo":
             cmd_str = (
-                f"sudo {mgr} install {packages}; "
+                f"sudo {shlex.quote(mgr)} install {safe_pkgs}; "
                 "echo; echo 'Press Enter to close...'; read"
             )
             if not self._launch_terminal(cmd_str):
                 messagebox.showwarning(
                     "No Terminal Found",
-                    f"Run manually:\n  sudo {mgr} install {packages}",
+                    f"Run manually:\n  sudo {mgr} install {safe_pkgs}",
                     parent=self,
                 )
                 return
         else:
-            script_path = os.path.join(
-                tempfile.gettempdir(), "proxmox-spice-install.sh"
+            fd, script_path = tempfile.mkstemp(
+                suffix=".sh", prefix="proxmox-spice-install-"
             )
-            with open(script_path, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write("#!/bin/bash\n")
+                f.write(f"trap 'rm -f {shlex.quote(script_path)}' EXIT\n")
                 f.write("echo ''\necho 'Enter root password:'\necho ''\n")
-                f.write(f"su -c '{mgr} install {packages}'\n")
+                f.write(f"su -c {shlex.quote(mgr + ' install ' + safe_pkgs)}\n")
                 f.write("echo ''\necho 'Press Enter...'\nread\n")
-            os.chmod(script_path, 0o755)
+            os.chmod(script_path, 0o700)
 
             if not self._launch_terminal(script_path):
+                os.unlink(script_path)
                 return
 
         messagebox.showinfo(
@@ -1153,7 +1160,7 @@ class SnapshotDialog(tk.Toplevel):
         data = api_request(
             self.cluster["host"],
             f"/api2/json/nodes/{self.vm['node']}/qemu/{self.vm['vmid']}"
-            f"/snapshot/{snap_name}/rollback",
+            f"/snapshot/{urllib.parse.quote(snap_name, safe='')}/rollback",
             method="POST", auth=self.auth,
         )
 
@@ -1253,7 +1260,7 @@ class SnapshotDialog(tk.Toplevel):
 
         endpoint = (
             f"/api2/json/nodes/{self.vm['node']}/qemu/{self.vm['vmid']}"
-            f"/snapshot?snapname={result['name']}"
+            f"/snapshot?snapname={urllib.parse.quote(result['name'], safe='')}"
         )
         if result["desc"]:
             endpoint += f"&description={urllib.parse.quote(result['desc'])}"
@@ -1296,7 +1303,7 @@ class SnapshotDialog(tk.Toplevel):
         data = api_request(
             self.cluster["host"],
             f"/api2/json/nodes/{self.vm['node']}/qemu/{self.vm['vmid']}"
-            f"/snapshot/{snap_name}",
+            f"/snapshot/{urllib.parse.quote(snap_name, safe='')}",
             method="DELETE", auth=self.auth,
         )
 
@@ -1328,6 +1335,8 @@ class ProxmoxSpiceManager(tk.Tk):
         self.config_data = load_config()
         self.current_cluster = None
         self.auth_cache = {}
+        self._closing = False
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         saved_theme = self.config_data.get("theme", "Catppuccin Mocha")
         if saved_theme in THEMES:
@@ -1373,6 +1382,17 @@ class ProxmoxSpiceManager(tk.Tk):
                 save_config(self.config_data)
 
     # ── UI Construction ───────────────────────────────────────────────────────
+    def _on_close(self):
+        self._closing = True
+        if hasattr(self, "_notes_combo") and self._notes_combo:
+            self._notes_combo.destroy()
+            self._notes_combo = None
+        for child in self.winfo_children():
+            if isinstance(child, tk.Toplevel):
+                child.destroy()
+        self.quit()
+        self.destroy()
+
     def _build_ui(self):
         for widget in self.winfo_children():
             widget.destroy()
@@ -1526,6 +1546,8 @@ class ProxmoxSpiceManager(tk.Tk):
         ).pack(side="right")
 
         self._all_vm_rows = []
+        self._checked_items = set()
+        self._notes_combo = None
 
         # Filter row
         filter_row = tk.Frame(content, bg=C["surface1"])
@@ -1546,6 +1568,7 @@ class ProxmoxSpiceManager(tk.Tk):
         filter_defs = [
             ("vmid", "VMID"), ("name", "Name"), ("node", "Node"),
             ("pool", "Pool"), ("snaps", "Snaps"), ("status", "Status"),
+            ("notes", "Notes"),
         ]
 
         for col_id, placeholder in filter_defs:
@@ -1579,7 +1602,7 @@ class ProxmoxSpiceManager(tk.Tk):
         table_frame = tk.Frame(content, bg=C["base"])
         table_frame.pack(fill="both", expand=True, padx=16, pady=(10, 0))
 
-        columns = ("vmid", "name", "node", "pool", "snaps", "status")
+        columns = ("check", "vmid", "name", "node", "pool", "snaps", "status", "notes")
         self.vm_tree = ttk.Treeview(
             table_frame, columns=columns, show="headings",
             selectmode="extended", height=12,
@@ -1602,7 +1625,16 @@ class ProxmoxSpiceManager(tk.Tk):
         )
         style.map("Treeview.Heading", background=[("active", C["surface2"])])
 
+        self.vm_tree.heading(
+            "check", text="☐",
+            command=self._toggle_all_checks,
+        )
+        self.vm_tree.column(
+            "check", width=40, minwidth=40, anchor="center", stretch=False,
+        )
         for col in columns:
+            if col == "check":
+                continue
             self.vm_tree.heading(
                 col, text=col.upper(),
                 command=lambda c=col: self._sort_tree(c),
@@ -1614,15 +1646,16 @@ class ProxmoxSpiceManager(tk.Tk):
         self.vm_tree.column("pool", width=100, minwidth=60)
         self.vm_tree.column("snaps", width=70, minwidth=50, anchor="center")
         self.vm_tree.column("status", width=110, minwidth=70, anchor="center")
+        self.vm_tree.column("notes", width=120, minwidth=60)
 
         self._all_columns = list(columns)
+        self._data_columns = [c for c in columns if c != "check"]
         if not hasattr(self, "_tree_sort_col"):
             self._tree_sort_col = None
             self._tree_sort_asc = True
         if not hasattr(self, "_display_columns"):
             self._display_columns = list(columns)
         else:
-            # Validate saved display columns still match
             if set(self._display_columns) != set(columns):
                 self._display_columns = list(columns)
         self._drag_col = None
@@ -1633,13 +1666,13 @@ class ProxmoxSpiceManager(tk.Tk):
         self.vm_tree.bind("<ButtonRelease-1>", self._on_heading_release)
 
         saved_order = self.config_data.get("column_order")
-        if saved_order and set(saved_order) == set(columns):
-            self._display_columns = saved_order
+        if saved_order and set(saved_order) == set(self._data_columns):
+            self._display_columns = ["check"] + saved_order
         self.vm_tree["displaycolumns"] = self._display_columns
 
         # Restore sort indicators on headings
         if self._tree_sort_col:
-            for c in columns:
+            for c in self._data_columns:
                 label = c.upper()
                 if c == self._tree_sort_col:
                     label += "  ▲" if self._tree_sort_asc else "  ▼"
@@ -1691,6 +1724,11 @@ class ProxmoxSpiceManager(tk.Tk):
             hover_fg=C["yellow"], **pbtn,
         ).pack(side="left", padx=(0, 4))
         HoverButton(
+            power_frame, text=" ↻ Reboot ", command=self._reboot_vm,
+            bg=C["surface0"], fg=C["peach"], hover_bg=C["surface1"],
+            hover_fg=C["peach"], **pbtn,
+        ).pack(side="left", padx=(0, 4))
+        HoverButton(
             power_frame, text=" ⏼ Force Stop ", command=self._stop_vm,
             bg=C["surface0"], fg=C["red"], hover_bg=C["surface1"],
             hover_fg=C["red"], **pbtn,
@@ -1705,7 +1743,19 @@ class ProxmoxSpiceManager(tk.Tk):
             command=self._quick_rollback,
             bg=C["surface0"], fg=C["peach"], hover_bg=C["surface1"],
             hover_fg=C["peach"], **pbtn,
+        ).pack(side="left", padx=(0, 4))
+        HoverButton(
+            power_frame, text=" Notes ⚙ ",
+            command=self._manage_note_options,
+            bg=C["surface0"], fg=C["subtext0"], hover_bg=C["surface1"],
+            hover_fg=C["text"], **pbtn,
         ).pack(side="left")
+
+        self._check_count_label = tk.Label(
+            bottom, text="", bg=C["base"], fg=C["sapphire"],
+            font=("sans-serif", 9),
+        )
+        self._check_count_label.pack(side="left", padx=(12, 0))
 
     # ── Theme ─────────────────────────────────────────────────────────────────
     def _on_theme_change(self, event=None):
@@ -1930,17 +1980,15 @@ class ProxmoxSpiceManager(tk.Tk):
     def _refresh_vms(self):
         if not self.current_cluster:
             return
+        cluster = self.current_cluster
+        auth = self._get_auth(cluster)
+        if not auth:
+            self.status_label.config(text="✗  Authentication failed", fg=C["red"])
+            return
         self.status_label.config(text="⏳  Loading VMs...", fg=C["yellow"])
         self.update_idletasks()
 
         def fetch():
-            cluster = self.current_cluster
-            auth = self._get_auth(cluster)
-            if not auth:
-                self.after(0, lambda: self.status_label.config(
-                    text="✗  Authentication failed", fg=C["red"]
-                ))
-                return
 
             data = api_request(
                 cluster["host"],
@@ -2022,21 +2070,28 @@ class ProxmoxSpiceManager(tk.Tk):
                         f"📸 {snap_count}" if snap_count > 0 else "—"
                     )
 
+                    vmid_str = str(vm.get("vmid", "?"))
+                    note = self.config_data.get(
+                        "vm_notes", {}
+                    ).get(vmid_str, "")
                     row = (
-                        str(vm.get("vmid", "?")),
+                        vmid_str,
                         vm.get("name", "unnamed"),
                         vm.get("node", "?"),
                         vm.get("pool", "—"),
                         snap_display,
                         display_status,
+                        note,
                     )
                     self._all_vm_rows.append((row, tag))
 
                 self._apply_filters()
+                tls_warn = "  ⚠ TLS off" if cluster.get(
+                    "skip_tls_verify", False) else ""
                 self.status_label.config(
                     text=f"◈  {cluster['name']}  —  "
-                    f"{len(spice_vms)} SPICE VMs",
-                    fg=C["text"],
+                    f"{len(spice_vms)} SPICE VMs{tls_warn}",
+                    fg=C["yellow"] if tls_warn else C["text"],
                 )
 
                 if hasattr(self, "_display_columns"):
@@ -2065,11 +2120,11 @@ class ProxmoxSpiceManager(tk.Tk):
 
         col_indices = {
             "vmid": 0, "name": 1, "node": 2, "pool": 3, "snaps": 4,
-            "status": 5,
+            "status": 5, "notes": 6,
         }
         placeholders = {
             "vmid": "VMID", "name": "Name", "node": "Node", "pool": "Pool",
-            "snaps": "Snaps", "status": "Status",
+            "snaps": "Snaps", "status": "Status", "notes": "Notes",
         }
 
         filters = {}
@@ -2086,11 +2141,18 @@ class ProxmoxSpiceManager(tk.Tk):
                 for cid, f_text in filters.items()
             )
             if match:
-                self.vm_tree.insert("", "end", values=row, tags=(tag,))
+                vmid = row[0]
+                check = "☑" if vmid in self._checked_items else "☐"
+                self.vm_tree.insert(
+                    "", "end", values=(check,) + row, tags=(tag,),
+                )
                 visible += 1
 
         self.vm_tree.tag_configure("running", foreground=C["green"])
         self.vm_tree.tag_configure("stopped", foreground=C["overlay0"])
+
+        self._update_check_header()
+        self._update_selection_count()
 
         # Re-apply sort after filter rebuild
         if self._tree_sort_col:
@@ -2106,7 +2168,7 @@ class ProxmoxSpiceManager(tk.Tk):
     def _clear_filters(self):
         placeholders = {
             "vmid": "VMID", "name": "Name", "node": "Node", "pool": "Pool",
-            "snaps": "Snaps", "status": "Status",
+            "snaps": "Snaps", "status": "Status", "notes": "Notes",
         }
         for col_id, var in self._filter_vars.items():
             var.set("")
@@ -2122,7 +2184,6 @@ class ProxmoxSpiceManager(tk.Tk):
         if not col:
             return
 
-        columns = ("vmid", "name", "node", "pool", "snaps", "status")
         rows = [
             (self.vm_tree.set(iid, col), iid)
             for iid in self.vm_tree.get_children("")
@@ -2141,43 +2202,21 @@ class ProxmoxSpiceManager(tk.Tk):
         for idx, (_, iid) in enumerate(rows):
             self.vm_tree.move(iid, "", idx)
 
-        for c in columns:
+        for c in self._data_columns:
             label = c.upper()
             if c == col:
                 label += "  ▲" if self._tree_sort_asc else "  ▼"
             self.vm_tree.heading(c, text=label)
 
     def _sort_tree(self, col):
+        if col == "check":
+            return
         if self._tree_sort_col == col:
             self._tree_sort_asc = not self._tree_sort_asc
         else:
             self._tree_sort_col = col
             self._tree_sort_asc = True
-
-        columns = ("vmid", "name", "node", "pool", "snaps", "status")
-        rows = [
-            (self.vm_tree.set(iid, col), iid)
-            for iid in self.vm_tree.get_children("")
-        ]
-
-        if col == "vmid":
-            rows.sort(
-                key=lambda r: int(r[0]) if r[0].isdigit() else 0,
-                reverse=not self._tree_sort_asc,
-            )
-        else:
-            rows.sort(
-                key=lambda r: r[0].lower(), reverse=not self._tree_sort_asc
-            )
-
-        for idx, (_, iid) in enumerate(rows):
-            self.vm_tree.move(iid, "", idx)
-
-        for c in columns:
-            label = c.upper()
-            if c == col:
-                label += "  ▲" if self._tree_sort_asc else "  ▼"
-            self.vm_tree.heading(c, text=label)
+        self._reapply_sort()
 
     # ── Column reorder ────────────────────────────────────────────────────────
     def _col_from_x(self, x):
@@ -2186,16 +2225,32 @@ class ProxmoxSpiceManager(tk.Tk):
             if col_id:
                 idx = int(col_id.replace("#", "")) - 1
                 if 0 <= idx < len(self._display_columns):
+                    if self._display_columns[idx] == "check":
+                        return None
                     return idx
         return None
 
     def _on_heading_press(self, event):
-        if self.vm_tree.identify_region(event.x, event.y) == "heading":
+        region = self.vm_tree.identify_region(event.x, event.y)
+        if region == "heading":
             self._drag_col = self._col_from_x(event.x)
             self._drag_start_x = event.x
         else:
             self._drag_col = None
             self._drag_start_x = None
+            if region == "cell":
+                col_id = self.vm_tree.identify_column(event.x)
+                display_idx = int(col_id.replace("#", "")) - 1
+                if 0 <= display_idx < len(self._display_columns):
+                    col_name = self._display_columns[display_idx]
+                    if col_name == "check":
+                        iid = self.vm_tree.identify_row(event.y)
+                        if iid:
+                            self._toggle_check(iid)
+                    elif col_name == "notes":
+                        iid = self.vm_tree.identify_row(event.y)
+                        if iid:
+                            self._edit_notes_cell(iid, event)
 
     def _on_heading_drag(self, event):
         if (self._drag_col is not None and self._drag_start_x is not None
@@ -2220,44 +2275,253 @@ class ProxmoxSpiceManager(tk.Tk):
         cols.insert(target_idx, cols.pop(self._drag_col))
         self._display_columns = cols
         self.vm_tree["displaycolumns"] = cols
-        self.config_data["column_order"] = cols
+        self.config_data["column_order"] = [c for c in cols if c != "check"]
         save_config(self.config_data)
 
         self._drag_col = None
         self._drag_start_x = None
 
+    # ── Checkbox Selection ────────────────────────────────────────────────────
+    def _toggle_check(self, iid):
+        values = list(self.vm_tree.item(iid, "values"))
+        vmid = values[1]
+        if vmid in self._checked_items:
+            self._checked_items.discard(vmid)
+            values[0] = "☐"
+        else:
+            self._checked_items.add(vmid)
+            values[0] = "☑"
+        self.vm_tree.item(iid, values=values)
+        self._update_check_header()
+        self._update_selection_count()
+
+    def _toggle_all_checks(self):
+        all_items = self.vm_tree.get_children("")
+        all_checked = all(
+            self.vm_tree.item(iid, "values")[0] == "☑"
+            for iid in all_items
+        ) if all_items else False
+
+        for iid in all_items:
+            values = list(self.vm_tree.item(iid, "values"))
+            vmid = values[1]
+            if all_checked:
+                self._checked_items.discard(vmid)
+                values[0] = "☐"
+            else:
+                self._checked_items.add(vmid)
+                values[0] = "☑"
+            self.vm_tree.item(iid, values=values)
+        self._update_check_header()
+        self._update_selection_count()
+
+    def _update_check_header(self):
+        all_items = self.vm_tree.get_children("")
+        if not all_items:
+            self.vm_tree.heading("check", text="☐")
+            return
+        all_checked = all(
+            self.vm_tree.item(iid, "values")[0] == "☑"
+            for iid in all_items
+        )
+        self.vm_tree.heading("check", text="☑" if all_checked else "☐")
+
+    def _update_selection_count(self):
+        count = len([
+            iid for iid in self.vm_tree.get_children("")
+            if self.vm_tree.item(iid, "values")[0] == "☑"
+        ])
+        if hasattr(self, "_check_count_label"):
+            if count > 0:
+                self._check_count_label.config(text=f"  {count} checked")
+            else:
+                self._check_count_label.config(text="")
+
+    # ── Notes Editing ────────────────────────────────────────────────────────
+    def _edit_notes_cell(self, iid, event):
+        if hasattr(self, "_notes_combo") and self._notes_combo:
+            self._notes_combo.destroy()
+            self._notes_combo = None
+
+        bbox = self.vm_tree.bbox(iid, column="notes")
+        if not bbox:
+            return
+
+        values = self.vm_tree.item(iid, "values")
+        vmid = values[1]
+        current = values[7] if len(values) > 7 else ""
+
+        options = self.config_data.get("note_options", [])
+        combo_values = [""] + options
+
+        combo = ttk.Combobox(
+            self.vm_tree, values=combo_values, state="normal",
+            font=("sans-serif", 10),
+        )
+        combo.set(current)
+        combo.place(x=bbox[0], y=bbox[1], width=bbox[2], height=bbox[3])
+        combo.focus_set()
+        combo.icursor("end")
+        self._notes_combo = combo
+
+        def commit(e=None):
+            val = combo.get().strip()
+            if val and val not in self.config_data.get("note_options", []):
+                self.config_data.setdefault("note_options", []).append(val)
+            vm_notes = self.config_data.setdefault("vm_notes", {})
+            if val:
+                vm_notes[vmid] = val
+            else:
+                vm_notes.pop(vmid, None)
+            save_config(self.config_data)
+
+            vals = list(self.vm_tree.item(iid, "values"))
+            vals[7] = val
+            self.vm_tree.item(iid, values=vals)
+
+            for i, (row, tag) in enumerate(self._all_vm_rows):
+                if row[0] == vmid:
+                    self._all_vm_rows[i] = (row[:-1] + (val,), tag)
+                    break
+
+            combo.destroy()
+            self._notes_combo = None
+
+        def cancel(e=None):
+            combo.destroy()
+            self._notes_combo = None
+
+        combo.bind("<Return>", commit)
+        combo.bind("<Escape>", cancel)
+        combo.bind("<FocusOut>", commit)
+        combo.bind("<<ComboboxSelected>>", commit)
+
+    def _manage_note_options(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("Manage Note Options")
+        dlg.geometry("300x350")
+        dlg.configure(bg=C["base"])
+        dlg.transient(self)
+        dlg.grab_set()
+
+        tk.Label(
+            dlg, text="Note Options", bg=C["base"], fg=C["text"],
+            font=("sans-serif", 12, "bold"),
+        ).pack(pady=(12, 8))
+
+        list_frame = tk.Frame(dlg, bg=C["base"])
+        list_frame.pack(fill="both", expand=True, padx=16)
+
+        listbox = tk.Listbox(
+            list_frame, bg=C["surface0"], fg=C["text"],
+            selectbackground=C["surface2"], selectforeground=C["text"],
+            font=("sans-serif", 10), relief="flat", borderwidth=0,
+        )
+        listbox.pack(fill="both", expand=True)
+
+        for opt in self.config_data.get("note_options", []):
+            listbox.insert("end", opt)
+
+        btn_frame = tk.Frame(dlg, bg=C["base"])
+        btn_frame.pack(fill="x", padx=16, pady=(8, 4))
+
+        add_var = tk.StringVar()
+        add_entry = tk.Entry(
+            btn_frame, textvariable=add_var, bg=C["surface0"],
+            fg=C["text"], insertbackground=C["text"], relief="flat",
+            font=("sans-serif", 10),
+        )
+        add_entry.pack(side="left", fill="x", expand=True, ipady=4)
+
+        def add_option():
+            val = add_var.get().strip()
+            if val and val not in self.config_data.get("note_options", []):
+                self.config_data.setdefault("note_options", []).append(val)
+                listbox.insert("end", val)
+                save_config(self.config_data)
+            add_var.set("")
+
+        def delete_selected():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            val = listbox.get(sel[0])
+            listbox.delete(sel[0])
+            opts = self.config_data.get("note_options", [])
+            if val in opts:
+                opts.remove(val)
+                save_config(self.config_data)
+
+        HoverButton(
+            btn_frame, text=" Add ", command=add_option,
+            bg=C["green"], fg=C["crust"], relief="flat", padx=8, pady=4,
+            hover_bg=C["teal"], hover_fg=C["crust"],
+            font=("sans-serif", 10),
+        ).pack(side="left", padx=(4, 0))
+
+        add_entry.bind("<Return>", lambda e: add_option())
+
+        bottom_frame = tk.Frame(dlg, bg=C["base"])
+        bottom_frame.pack(fill="x", padx=16, pady=(4, 12))
+
+        HoverButton(
+            bottom_frame, text=" Delete Selected ",
+            command=delete_selected,
+            bg=C["red"], fg=C["crust"], relief="flat", padx=8, pady=4,
+            hover_bg=C["red"], hover_fg=C["crust"],
+            font=("sans-serif", 10),
+        ).pack(side="left")
+
+        HoverButton(
+            bottom_frame, text=" Close ", command=dlg.destroy,
+            bg=C["surface1"], fg=C["text"], relief="flat", padx=8, pady=4,
+            hover_bg=C["surface2"], font=("sans-serif", 10),
+        ).pack(side="right")
+
     # ── VM Selection ──────────────────────────────────────────────────────────
     def _get_selected_vms(self):
-        sel = self.vm_tree.selection()
-        if not sel:
-            return []
         vms = []
-        for iid in sel:
+        for iid in self.vm_tree.get_children(""):
             values = self.vm_tree.item(iid, "values")
+            if values[0] != "☑":
+                continue
             status = (
-                values[5].replace("● ", "").replace("○ ", "").strip()
+                values[6].replace("● ", "").replace("○ ", "").strip()
             )
             vms.append({
-                "vmid": values[0], "name": values[1], "node": values[2],
-                "pool": values[3], "snaps": values[4], "status": status,
+                "vmid": values[1], "name": values[2], "node": values[3],
+                "pool": values[4], "snaps": values[5], "status": status,
             })
         return vms
 
     def _get_selected_vm(self):
-        """Get a single selected VM. Returns None if 0 or >1 selected."""
-        vms = self._get_selected_vms()
-        if not vms:
+        """Get a single selected VM from tree selection (click)."""
+        sel = self.vm_tree.selection()
+        if not sel:
             return None
-        if len(vms) > 1:
+        if len(sel) > 1:
             messagebox.showinfo(
                 "Single Selection",
                 "Please select a single VM for this action.",
                 parent=self,
             )
             return None
-        return vms[0]
+        values = self.vm_tree.item(sel[0], "values")
+        status = values[6].replace("● ", "").replace("○ ", "").strip()
+        return {
+            "vmid": values[1], "name": values[2], "node": values[3],
+            "pool": values[4], "snaps": values[5], "status": status,
+        }
 
     def _on_vm_double_click(self, event):
+        region = self.vm_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        col_id = self.vm_tree.identify_column(event.x)
+        display_idx = int(col_id.replace("#", "")) - 1
+        if 0 <= display_idx < len(self._display_columns):
+            if self._display_columns[display_idx] in ("check", "notes"):
+                return
         self._launch_spice()
 
     # ── SPICE Launch ──────────────────────────────────────────────────────────
@@ -2326,7 +2590,16 @@ class ProxmoxSpiceManager(tk.Tk):
                         "delete-this-file=1\n"
                     )
 
-                subprocess.Popen(["remote-viewer", vv_path])
+                os.chmod(vv_path, 0o600)
+
+                proc = subprocess.Popen(["remote-viewer", vv_path])
+                def _cleanup_vv(p=proc, path=vv_path):
+                    p.wait()
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+                threading.Thread(target=_cleanup_vv, daemon=True).start()
                 self.after(0, lambda: self.status_label.config(
                     text=f"✓  Connected to {vm['name']} ({vm['vmid']})",
                     fg=C["green"],
@@ -2397,6 +2670,13 @@ class ProxmoxSpiceManager(tk.Tk):
                 parent=self,
             ):
                 return
+        elif action == "reboot":
+            if not messagebox.askyesno(
+                "Reboot",
+                f"Reboot {len(valid)} VM(s)?\n\n{vm_names}",
+                parent=self,
+            ):
+                return
         elif action == "start" and len(valid) > 1:
             if not messagebox.askyesno(
                 "Start VMs", f"Start {len(valid)} VM(s)?\n\n{vm_names}",
@@ -2455,7 +2735,8 @@ class ProxmoxSpiceManager(tk.Tk):
 
             expected = {
                 str(vm["vmid"]): (
-                    "running" if action == "start" else "stopped"
+                    "running" if action in ("start", "reboot")
+                    else "stopped"
                 )
                 for vm in valid
             }
@@ -2474,6 +2755,9 @@ class ProxmoxSpiceManager(tk.Tk):
 
     def _stop_vm(self):
         self._vm_power_action("stop", "Force stopping")
+
+    def _reboot_vm(self):
+        self._vm_power_action("reboot", "Rebooting")
 
     # ── Quick Rollback ────────────────────────────────────────────────────────
     def _quick_rollback(self):
@@ -2562,7 +2846,7 @@ class ProxmoxSpiceManager(tk.Tk):
                     rb_data = api_request(
                         cluster["host"],
                         f"/api2/json/nodes/{vm['node']}"
-                        f"/qemu/{vm['vmid']}/snapshot/{snap_name}/rollback",
+                        f"/qemu/{vm['vmid']}/snapshot/{urllib.parse.quote(snap_name, safe='')}/rollback",
                         method="POST", auth=saved_auth,
                     )
                     if "error" in rb_data:
@@ -2594,6 +2878,8 @@ class ProxmoxSpiceManager(tk.Tk):
         self, expected_changes, auth=None, attempts=0, max_attempts=12
     ):
         """Poll every 10s until VM statuses match expected, or timeout."""
+        if self._closing:
+            return
         if attempts >= max_attempts:
             self._refresh_vms()
             return
@@ -2640,6 +2926,8 @@ class ProxmoxSpiceManager(tk.Tk):
         self, vmid, node, old_count, auth=None, attempts=0, max_attempts=12
     ):
         """Poll every 10s until snapshot count changes, or timeout."""
+        if self._closing:
+            return
         if attempts >= max_attempts:
             self._refresh_vms()
             return
@@ -2712,7 +3000,7 @@ class ProxmoxSpiceManager(tk.Tk):
         content = (
             "[Desktop Entry]\n"
             f"Name={vm['name']} (VM {vm['vmid']})\n"
-            f"Exec=/usr/bin/python3 {script_path}\n"
+            f"Exec=/usr/bin/python3 \"{script_path}\"\n"
             "Icon=computer\n"
             "Type=Application\n"
             "Terminal=false\n"
@@ -2769,7 +3057,7 @@ class ProxmoxSpiceManager(tk.Tk):
         content = (
             "[Desktop Entry]\n"
             "Name=Proxmox SPICE Manager\n"
-            f"Exec=/usr/bin/python3 {installed_script}\n"
+            f"Exec=/usr/bin/python3 \"{installed_script}\"\n"
             f"Icon={icon_value}\n"
             "Type=Application\n"
             "Terminal=false\n"
