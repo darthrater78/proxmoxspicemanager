@@ -22,7 +22,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.2.2"
+APP_VERSION = "2.2.3"
 
 # ─── Theme Definitions ────────────────────────────────────────────────────────
 THEMES = {

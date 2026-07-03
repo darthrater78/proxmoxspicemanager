@@ -40,7 +40,7 @@ APPDATA = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
 CONFIG_DIR = APPDATA / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
-APP_VERSION_WIN = "2.2.2-win"
+APP_VERSION_WIN = "2.2.3-win"
 
 FONT = "Segoe UI"
 MONO = "Consolas"
@@ -474,11 +474,14 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
             shortcut_path = start_menu / "Proxmox SPICE Manager.lnk"
             script_path = Path(os.path.abspath(__file__))
 
+            def _ps_escape(val: str) -> str:
+                return str(val).replace("'", "''")
+
             ps_script = "\n".join([
-                f'$sc = "{shortcut_path}"',
-                f'$exe = "{sys.executable}"',
-                f'$args = \'"{script_path}"\'',
-                f'$dir = "{script_path.parent}"',
+                f"$sc = '{_ps_escape(shortcut_path)}'",
+                f"$exe = '{_ps_escape(sys.executable)}'",
+                f"$args = '\"' + '{_ps_escape(script_path)}' + '\"'",
+                f"$dir = '{_ps_escape(script_path.parent)}'",
                 '$ws = New-Object -ComObject WScript.Shell',
                 '$s = $ws.CreateShortcut($sc)',
                 '$s.TargetPath = $exe',
