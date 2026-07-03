@@ -109,18 +109,25 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 ## Project Structure
 
 ```
-proxmox-spice-manager.py        # Linux edition (single file)
-proxmox-spice-manager-win.py    # Windows edition (single file)
+proxmox_spice_common.py         # Shared base module (themes, API, dialogs, base class)
+proxmox-spice-manager.py        # Linux edition (keyring, .desktop export, icon picker)
+proxmox-spice-manager-win.py    # Windows edition (DPAPI, registry, shortcuts)
+Proxmox SPICE Manager.spec      # PyInstaller config for building the Windows .exe
 README.md                       # This file
 proxmox-setup.md                # Proxmox server config and app setup (all platforms)
 linux-setup.md                  # Linux installation walkthrough with screenshots
 build-windows.md                # Instructions for building a standalone Windows .exe
 ```
 
-Both editions are self-contained single-file applications with no external package dependencies beyond the platform prerequisites listed above.
+Both platform scripts inherit from a shared base class in `proxmox_spice_common.py`. No external package dependencies beyond the platform prerequisites listed above.
 
 ## Version History
 
+- **2.2.2** — Add GitHub and Release Notes links in header
+- **2.2.1** — Filter UI redesign, power action UX, security hardening
+- **2.2.0** — Bulk select, reboot, notes column, security hardening
+- **2.1.4** — App icon update
+- **2.1.3** — App icon — SPICE text with S monogram for small sizes
 - **2.1.1** — Bug fixes: secret migration safety, API error normalization, sort persistence, auth passed to polling methods
 - **2.1.0** — Rewrote to pure `urllib` (removed curl/jq deps), added column filters, snapshot indicators, pool column, import/export
 - **2.0.0** — Full GUI rewrite with multi-cluster support, themes, snapshot management, keyring integration

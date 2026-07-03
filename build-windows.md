@@ -15,21 +15,17 @@ This guide walks through building a standalone `.exe` from `proxmox-spice-manage
 
 ## Build Steps
 
-1. Open PowerShell and navigate to the folder containing `proxmox-spice-manager-win.py`:
+1. Open PowerShell and navigate to the project folder:
    ```powershell
-   cd C:\path\to\your\folder
+   cd C:\path\to\proxmoxspicemanager
    ```
 
-2. Run PyInstaller:
+2. Run PyInstaller using the included `.spec` file:
    ```powershell
-   pyinstaller --onefile --windowed --name "Proxmox SPICE Manager" proxmox-spice-manager-win.py
+   pyinstaller "Proxmox SPICE Manager.spec"
    ```
 
-   | Flag | Purpose |
-   |---|---|
-   | `--onefile` | Bundles everything into a single `.exe` instead of a folder |
-   | `--windowed` | Suppresses the console window (GUI app) |
-   | `--name` | Sets the output filename |
+   The `.spec` file configures single-file mode, windowed (no console), the app icon, and ensures the shared `proxmox_spice_common` module is bundled correctly.
 
 3. Wait about 30–60 seconds. When it finishes you'll see:
    ```
@@ -41,34 +37,21 @@ This guide walks through building a standalone `.exe` from `proxmox-spice-manage
    dist\Proxmox SPICE Manager.exe
    ```
 
-## Optional: Custom Icon
-
-If you have a `.ico` file, add `--icon` to the build command:
-
-```powershell
-pyinstaller --onefile --windowed --icon=app-icon.ico --name "Proxmox SPICE Manager" proxmox-spice-manager-win.py
-```
-
-To convert a `.png` to `.ico`, you can use an online tool like [convertio.co](https://convertio.co/png-ico/) or ImageMagick:
-
-```powershell
-magick convert app-icon.png -define icon:auto-resize=256,128,64,48,32,16 app-icon.ico
-```
-
 ## Output Structure
 
 After building, your folder will look like:
 
 ```
 your-folder/
-├── proxmox-spice-manager-win.py    ← source (keep this)
-├── Proxmox SPICE Manager.spec      ← PyInstaller config (auto-generated)
-├── build/                           ← temp build files (safe to delete)
+├── proxmox_spice_common.py          ← shared base module (required for build)
+├── proxmox-spice-manager-win.py     ← Windows entry point
+├── Proxmox SPICE Manager.spec       ← PyInstaller config (committed to repo)
+├── build/                            ← temp build files (safe to delete)
 └── dist/
-    └── Proxmox SPICE Manager.exe   ← your standalone app
+    └── Proxmox SPICE Manager.exe    ← your standalone app
 ```
 
-The `build/` folder and `.spec` file can be deleted — they're only needed during the build. If you want to rebuild later, PyInstaller will recreate them.
+The `build/` folder can be deleted — it's only needed during the build. The `.spec` file is part of the project and should be kept.
 
 ## What Gets Bundled
 
@@ -76,6 +59,7 @@ The `.exe` includes:
 
 - Python interpreter
 - tkinter (GUI framework)
+- `proxmox_spice_common` — shared module with themes, API layer, dialogs, and base class
 - All standard library modules the app uses (`json`, `ssl`, `urllib`, `ctypes`, etc.)
 - DPAPI encryption (via `ctypes` — no extra packages)
 
