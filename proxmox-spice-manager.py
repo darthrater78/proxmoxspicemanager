@@ -9,7 +9,7 @@ Dependencies: python3-tkinter, python3-keyring, remote-viewer (virt-viewer)
 Install on Fedora:  sudo dnf install python3-tkinter python3-keyring virt-viewer
 Install on Debian:  sudo apt install python3-tk python3-keyring virt-viewer
 
-VERSION 2.2.1
+VERSION 2.2.2
 """
 
 import json
@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.error
 import importlib
 import copy
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -76,7 +77,7 @@ except ModuleNotFoundError:
 CONFIG_DIR = Path.home() / ".config" / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.2.2"
 
 # Resolve icon path — works both from source and when frozen by PyInstaller
 _BASE_DIR = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
@@ -1413,6 +1414,25 @@ class ProxmoxSpiceManager(tk.Tk):
             title_frame, text=f"Proxmox SPICE Manager v{APP_VERSION}",
             bg=C["crust"], fg=C["text"], font=("sans-serif", 12, "bold"),
         ).pack(side="left")
+
+        links_frame = tk.Frame(title_frame, bg=C["crust"])
+        links_frame.pack(side="left", padx=(12, 0))
+        gh_link = tk.Label(
+            links_frame, text="GitHub", bg=C["crust"], fg=C["blue"],
+            font=("sans-serif", 9, "underline"), cursor="hand2",
+        )
+        gh_link.pack(side="left")
+        gh_link.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/darthrater78/proxmoxspicemanager"))
+        tk.Label(
+            links_frame, text=" · ", bg=C["crust"], fg=C["overlay0"],
+            font=("sans-serif", 9),
+        ).pack(side="left")
+        rn_link = tk.Label(
+            links_frame, text="Release Notes", bg=C["crust"], fg=C["blue"],
+            font=("sans-serif", 9, "underline"), cursor="hand2",
+        )
+        rn_link.pack(side="left")
+        rn_link.bind("<Button-1>", lambda e: webbrowser.open(f"https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v{APP_VERSION}"))
 
         hbtn = {
             "bg": C["crust"], "fg": C["subtext0"], "relief": "flat",

@@ -27,6 +27,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import copy
+import webbrowser
 import ctypes
 import ctypes.wintypes
 import winreg
@@ -42,7 +43,7 @@ APPDATA = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
 CONFIG_DIR = APPDATA / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.2.1-win"
+APP_VERSION = "2.2.2-win"
 
 # ─── Font Constants ──────────────────────────────────────────────────────────
 FONT = "Segoe UI"
@@ -1192,6 +1193,25 @@ class ProxmoxSpiceManager(tk.Tk):
             title_frame, text=f"Proxmox SPICE Manager v{APP_VERSION}",
             bg=C["crust"], fg=C["text"], font=(FONT, 12, "bold"),
         ).pack(side="left")
+
+        links_frame = tk.Frame(title_frame, bg=C["crust"])
+        links_frame.pack(side="left", padx=(12, 0))
+        gh_link = tk.Label(
+            links_frame, text="GitHub", bg=C["crust"], fg=C["blue"],
+            font=(FONT, 9, "underline"), cursor="hand2",
+        )
+        gh_link.pack(side="left")
+        gh_link.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/darthrater78/proxmoxspicemanager"))
+        tk.Label(
+            links_frame, text=" · ", bg=C["crust"], fg=C["overlay0"],
+            font=(FONT, 9),
+        ).pack(side="left")
+        rn_link = tk.Label(
+            links_frame, text="Release Notes", bg=C["crust"], fg=C["blue"],
+            font=(FONT, 9, "underline"), cursor="hand2",
+        )
+        rn_link.pack(side="left")
+        rn_link.bind("<Button-1>", lambda e: webbrowser.open(f"https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v{APP_VERSION.replace('-win', '')}"))
 
         hbtn = {
             "bg": C["crust"], "fg": C["subtext0"], "relief": "flat",
