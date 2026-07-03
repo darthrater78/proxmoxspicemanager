@@ -42,7 +42,7 @@ APPDATA = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
 CONFIG_DIR = APPDATA / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.2.0-win"
+APP_VERSION = "2.2.1-win"
 
 # ─── Font Constants ──────────────────────────────────────────────────────────
 FONT = "Segoe UI"
@@ -1328,58 +1328,8 @@ class ProxmoxSpiceManager(tk.Tk):
         self._checked_items = set()
         self._notes_combo = None
 
-        # Filter row
-        filter_row = tk.Frame(content, bg=C["surface1"])
-        filter_row.pack(fill="x", padx=16, pady=(8, 0))
-
-        fentry = {
-            "bg": C["crust"], "fg": C["text"], "insertbackground": C["text"],
-            "relief": "flat", "font": (FONT, 9), "highlightthickness": 1,
-            "highlightcolor": C["blue"], "highlightbackground": C["surface1"],
-        }
-
-        tk.Label(
-            filter_row, text="Filter:", bg=C["surface1"], fg=C["overlay0"],
-            font=(FONT, 9),
-        ).pack(side="left", padx=(4, 4))
-
-        self._filter_vars = {}
-        self._filter_entries = {}
-        filter_defs = [
-            ("vmid", "VMID"), ("name", "Name"), ("node", "Node"),
-            ("pool", "Pool"), ("snaps", "Snaps"), ("status", "Status"),
-            ("notes", "Notes"),
-        ]
-
-        for col_id, placeholder in filter_defs:
-            var = tk.StringVar()
-            var.trace_add("write", lambda *args: self._apply_filters())
-            self._filter_vars[col_id] = var
-
-            entry = tk.Entry(filter_row, textvariable=var, width=1, **fentry)
-            entry.pack(
-                side="left", fill="x", expand=True, ipady=3, padx=(0, 1)
-            )
-            entry.insert(0, placeholder)
-            entry.config(fg=C["overlay0"])
-            entry.bind(
-                "<FocusIn>",
-                lambda e, en=entry, ph=placeholder, v=var:
-                    self._filter_focus_in(en, ph, v),
-            )
-            entry.bind(
-                "<FocusOut>",
-                lambda e, en=entry, ph=placeholder, v=var:
-                    self._filter_focus_out(en, ph, v),
-            )
-            self._filter_entries[col_id] = entry
-
-        HoverButton(
-            filter_row, text=" X ", command=self._clear_filters,
-            bg=C["surface1"], fg=C["overlay0"], relief="flat", padx=4,
-            pady=1, hover_bg=C["surface2"], hover_fg=C["red"],
-            font=(FONT, 9),
-        ).pack(side="right", padx=(2, 2))
+        self._active_filters = {}
+        self._filter_popup = None
 
         # VM Table
         table_frame = tk.Frame(content, bg=C["base"])
@@ -1446,6 +1396,9 @@ class ProxmoxSpiceManager(tk.Tk):
         self.vm_tree.bind("<ButtonPress-1>", self._on_heading_press)
         self.vm_tree.bind("<B1-Motion>", self._on_heading_drag)
         self.vm_tree.bind("<ButtonRelease-1>", self._on_heading_release)
+        self.vm_tree.bind("<Button-3>", self._on_heading_right_click)
+        self.vm_tree.bind("<Motion>", self._show_heading_tooltip)
+        self.vm_tree.bind("<Leave>", self._hide_heading_tooltip)
 
         saved_order = self.config_data.get("column_order")
         if saved_order and set(saved_order) == set(self._data_columns):
@@ -1780,6 +1733,7 @@ class ProxmoxSpiceManager(tk.Tk):
                     row = (vmid_str, vm.get("name", "unnamed"), vm.get("node", "?"), vm.get("pool", "—"), snap_display, display_status, note)
                     self._all_vm_rows.append((row, tag))
 
+                self._refresh_filter_dropdowns()
                 self._apply_filters()
                 tls_warn = "  ⚠ TLS off" if cluster.get("skip_tls_verify", False) else ""
                 self.status_label.config(text=f"◈  {cluster['name']}  —  {len(spice_vms)} SPICE VMs{tls_warn}", fg=C["yellow"] if tls_warn else C["text"])
@@ -1793,39 +1747,191 @@ class ProxmoxSpiceManager(tk.Tk):
 
         threading.Thread(target=fetch, daemon=True).start()
 
-    # ── Filtering ─────────────────────────────────────────────────────────────
-    def _filter_focus_in(self, entry, placeholder, var):
-        if entry.get() == placeholder:
-            entry.delete(0, "end")
-            entry.config(fg=C["text"])
+    # ── Filtering (right-click column header popups) ────────────────────────
+    def _on_heading_right_click(self, event):
+        if self._filter_popup and self._filter_popup.winfo_exists():
+            self._filter_popup.destroy()
+            self._filter_popup = None
+            return
+        region = self.vm_tree.identify_region(event.x, event.y)
+        if region != "heading":
+            return
+        col_id = self.vm_tree.identify_column(event.x)
+        if not col_id:
+            return
+        idx = int(col_id.replace("#", "")) - 1
+        if idx < 0 or idx >= len(self._display_columns):
+            return
+        col_name = self._display_columns[idx]
+        if col_name == "check":
+            return
+        self._show_filter_popup(col_name, event.x_root, event.y_root)
 
-    def _filter_focus_out(self, entry, placeholder, var):
-        if not entry.get():
-            entry.insert(0, placeholder)
-            entry.config(fg=C["overlay0"])
+    def _show_heading_tooltip(self, event):
+        region = self.vm_tree.identify_region(event.x, event.y)
+        if region == "heading":
+            col_id = self.vm_tree.identify_column(event.x)
+            if col_id:
+                idx = int(col_id.replace("#", "")) - 1
+                if 0 <= idx < len(self._display_columns) and self._display_columns[idx] != "check":
+                    if not hasattr(self, "_heading_tip") or not self._heading_tip or not self._heading_tip.winfo_exists():
+                        tip = tk.Toplevel(self)
+                        tip.wm_overrideredirect(True)
+                        lbl = tk.Label(
+                            tip, text="Right-click to filter", bg=C["surface2"],
+                            fg=C["subtext0"], font=(FONT, 8), padx=6, pady=2,
+                        )
+                        lbl.pack()
+                        tip.geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
+                        self._heading_tip = tip
+                    return
+        if hasattr(self, "_heading_tip") and self._heading_tip and self._heading_tip.winfo_exists():
+            self._heading_tip.destroy()
+            self._heading_tip = None
+
+    def _hide_heading_tooltip(self, event):
+        if hasattr(self, "_heading_tip") and self._heading_tip and self._heading_tip.winfo_exists():
+            self._heading_tip.destroy()
+            self._heading_tip = None
+
+    def _show_filter_popup(self, col_name, x, y):
+        if self._filter_popup and self._filter_popup.winfo_exists():
+            self._filter_popup.destroy()
+
+        popup = tk.Toplevel(self)
+        popup.wm_overrideredirect(True)
+        popup.configure(bg=C["surface0"], highlightbackground=C["overlay0"], highlightthickness=1)
+        popup.geometry(f"+{x}+{y}")
+        popup.lift()
+        self._filter_popup = popup
+
+        title = tk.Label(
+            popup, text=f"Filter: {col_name.upper()}", bg=C["surface0"],
+            fg=C["subtext0"], font=(FONT, 9, "bold"), anchor="w",
+        )
+        title.pack(fill="x", padx=8, pady=(6, 2))
+
+        col_indices = {"vmid": 0, "name": 1, "node": 2, "pool": 3, "snaps": 4, "status": 5, "notes": 6}
+        current_val = self._active_filters.get(col_name, "")
+
+        if col_name == "name":
+            var = tk.StringVar(value=current_val)
+            entry = tk.Entry(
+                popup, textvariable=var, bg=C["surface1"], fg=C["text"],
+                insertbackground=C["text"], relief="flat", font=(FONT, 10),
+            )
+            entry.pack(fill="x", padx=8, pady=4, ipady=3)
+            entry.focus_set()
+            entry.select_range(0, "end")
+
+            def apply_name_filter(event=None):
+                val = var.get().strip()
+                if val:
+                    self._active_filters["name"] = val
+                else:
+                    self._active_filters.pop("name", None)
+                self._close_filter_popup()
+                self._apply_filters()
+                self._update_heading_labels()
+
+            entry.bind("<Return>", apply_name_filter)
+        else:
+            values = []
+            if hasattr(self, "_all_vm_rows") and self._all_vm_rows:
+                if col_name == "notes":
+                    values = self.config_data.get("note_options", [])
+                else:
+                    values = sorted(set(
+                        str(row[col_indices[col_name]])
+                        for row, _ in self._all_vm_rows
+                        if str(row[col_indices[col_name]])
+                    ))
+
+            combo_var = tk.StringVar(value=current_val)
+            combo = ttk.Combobox(
+                popup, textvariable=combo_var, values=[""] + values,
+                state="readonly", font=(FONT, 10), width=20,
+            )
+            combo.pack(fill="x", padx=8, pady=4)
+            combo.focus_set()
+
+            def apply_dropdown_filter(event=None):
+                val = combo_var.get().strip()
+                if val:
+                    self._active_filters[col_name] = val
+                else:
+                    self._active_filters.pop(col_name, None)
+                self._close_filter_popup()
+                self._apply_filters()
+                self._update_heading_labels()
+
+            combo.bind("<<ComboboxSelected>>", apply_dropdown_filter)
+
+        btn_frame = tk.Frame(popup, bg=C["surface0"])
+        btn_frame.pack(fill="x", padx=8, pady=(2, 6))
+
+        if col_name in self._active_filters:
+            HoverButton(
+                btn_frame, text="Clear", command=lambda: self._clear_single_filter(col_name, popup),
+                bg=C["red"], fg=C["crust"], relief="flat", padx=6, pady=2,
+                hover_bg=C["red"], hover_fg=C["crust"], font=(FONT, 9),
+            ).pack(side="left")
+
+        if self._active_filters:
+            HoverButton(
+                btn_frame, text="Clear All", command=lambda: self._clear_filters(popup),
+                bg=C["surface1"], fg=C["subtext0"], relief="flat", padx=6, pady=2,
+                hover_bg=C["surface2"], hover_fg=C["text"], font=(FONT, 9),
+            ).pack(side="right")
+
+        popup.bind("<Escape>", lambda e: self._close_filter_popup())
+        self._filter_deactivate_id = self.bind("<Deactivate>", lambda e: self._close_filter_popup())
+
+    def _close_filter_popup(self):
+        if hasattr(self, "_filter_deactivate_id") and self._filter_deactivate_id:
+            self.unbind("<Deactivate>", self._filter_deactivate_id)
+            self._filter_deactivate_id = None
+        if self._filter_popup and self._filter_popup.winfo_exists():
+            self._filter_popup.destroy()
+        self._filter_popup = None
+
+    def _clear_single_filter(self, col_name, popup=None):
+        self._active_filters.pop(col_name, None)
+        if popup and popup.winfo_exists():
+            popup.destroy()
+        self._filter_popup = None
+        self._apply_filters()
+        self._update_heading_labels()
 
     def _apply_filters(self):
         if not hasattr(self, "_all_vm_rows"):
             return
         col_indices = {"vmid": 0, "name": 1, "node": 2, "pool": 3, "snaps": 4, "status": 5, "notes": 6}
-        placeholders = {"vmid": "VMID", "name": "Name", "node": "Node", "pool": "Pool", "snaps": "Snaps", "status": "Status", "notes": "Notes"}
 
-        filters = {}
-        for col_id, var in self._filter_vars.items():
-            val = var.get().strip().lower()
-            if val and val != placeholders.get(col_id, "").lower():
-                filters[col_id] = val
+        filters = {k: v.lower() for k, v in self._active_filters.items() if v}
 
         self.vm_tree.delete(*self.vm_tree.get_children())
         visible = 0
         for row, tag in self._all_vm_rows:
-            if all(f_text in str(row[col_indices.get(cid, -1)]).lower() for cid, f_text in filters.items()):
-                vmid = row[0]
-                check = "☑" if vmid in self._checked_items else "☐"
-                self.vm_tree.insert(
-                    "", "end", values=(check,) + row, tags=(tag,),
-                )
-                visible += 1
+            match = True
+            for cid, f_text in filters.items():
+                cell = str(row[col_indices.get(cid, -1)]).lower()
+                if cid == "name":
+                    if f_text not in cell:
+                        match = False
+                        break
+                else:
+                    if cell != f_text:
+                        match = False
+                        break
+            if not match:
+                continue
+            vmid = row[0]
+            check = "☑" if vmid in self._checked_items else "☐"
+            self.vm_tree.insert(
+                "", "end", values=(check,) + row, tags=(tag,),
+            )
+            visible += 1
 
         self.vm_tree.tag_configure("running", foreground=C["green"])
         self.vm_tree.tag_configure("stopped", foreground=C["overlay0"])
@@ -1839,14 +1945,32 @@ class ProxmoxSpiceManager(tk.Tk):
         if filters and visible != len(self._all_vm_rows):
             self.status_label.config(text=f"Showing {visible} of {len(self._all_vm_rows)} VMs", fg=C["sapphire"])
 
-    def _clear_filters(self):
-        placeholders = {"vmid": "VMID", "name": "Name", "node": "Node", "pool": "Pool", "snaps": "Snaps", "status": "Status", "notes": "Notes"}
-        for col_id, var in self._filter_vars.items():
-            var.set("")
-            entry = self._filter_entries[col_id]
-            entry.delete(0, "end")
-            entry.insert(0, placeholders[col_id])
-            entry.config(fg=C["overlay0"])
+    def _clear_filters(self, popup=None):
+        self._active_filters.clear()
+        if popup and popup.winfo_exists():
+            popup.destroy()
+        self._filter_popup = None
+        self._apply_filters()
+        self._update_heading_labels()
+
+    def _update_heading_labels(self):
+        import tkinter.font as tkfont
+        heading_font = tkfont.Font(family=FONT, size=9, weight="bold")
+        sort_col = self._tree_sort_col
+        for c in self._data_columns:
+            label = c.upper()
+            if c in self._active_filters:
+                label += f" [{self._active_filters[c]}]"
+            if c == sort_col:
+                label += "  ▲" if self._tree_sort_asc else "  ▼"
+            self.vm_tree.heading(c, text=label)
+            needed = heading_font.measure(label) + 24
+            current = self.vm_tree.column(c, "width")
+            if needed > current:
+                self.vm_tree.column(c, width=needed)
+
+    def _refresh_filter_dropdowns(self):
+        pass
 
     # ── Sorting ───────────────────────────────────────────────────────────────
     def _reapply_sort(self):
@@ -1860,11 +1984,7 @@ class ProxmoxSpiceManager(tk.Tk):
             rows.sort(key=lambda r: r[0].lower(), reverse=not self._tree_sort_asc)
         for idx, (_, iid) in enumerate(rows):
             self.vm_tree.move(iid, "", idx)
-        for c in self._data_columns:
-            label = c.upper()
-            if c == col:
-                label += "  ▲" if self._tree_sort_asc else "  ▼"
-            self.vm_tree.heading(c, text=label)
+        self._update_heading_labels()
 
     def _sort_tree(self, col):
         if col == "check":
@@ -2081,12 +2201,16 @@ class ProxmoxSpiceManager(tk.Tk):
         )
         add_entry.pack(side="left", fill="x", expand=True, ipady=4)
 
+        def _refresh_notes_filter():
+            pass
+
         def add_option():
             val = add_var.get().strip()
             if val and val not in self.config_data.get("note_options", []):
                 self.config_data.setdefault("note_options", []).append(val)
                 listbox.insert("end", val)
                 save_config(self.config_data)
+                _refresh_notes_filter()
             add_var.set("")
 
         def delete_selected():
@@ -2099,6 +2223,7 @@ class ProxmoxSpiceManager(tk.Tk):
             if val in opts:
                 opts.remove(val)
                 save_config(self.config_data)
+                _refresh_notes_filter()
 
         HoverButton(
             btn_frame, text=" Add ", command=add_option,
@@ -2260,8 +2385,12 @@ class ProxmoxSpiceManager(tk.Tk):
     def _vm_power_action(self, action, action_label):
         vms = self._get_selected_vms()
         if not vms:
-            messagebox.showinfo("No Selection", "Select one or more VMs.", parent=self)
-            return
+            vm = self._get_selected_vm()
+            if vm:
+                vms = [vm]
+            else:
+                messagebox.showinfo("No Selection", "Select one or more VMs.", parent=self)
+                return
 
         if action == "start":
             valid = [v for v in vms if v["status"] != "running"]
