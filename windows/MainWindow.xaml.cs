@@ -57,7 +57,7 @@ public partial class MainWindow : Window
 
     private void SaveConfig()
     {
-        _config.Version = "2.2.3";
+        _config.Version = "1.0.0";
         ConfigService.Save(_config);
     }
 
@@ -642,7 +642,7 @@ public partial class MainWindow : Window
         => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager") { UseShellExecute = true });
 
     private void OnReleaseNotesClick(object sender, RoutedEventArgs e)
-        => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v2.2.3") { UseShellExecute = true });
+        => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v1.0.0-wpf") { UseShellExecute = true });
 
     private void OnCheckPrereqs(object sender, RoutedEventArgs e)
     {

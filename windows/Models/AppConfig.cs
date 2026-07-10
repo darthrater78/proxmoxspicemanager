@@ -5,7 +5,7 @@ namespace ProxmoxSpiceManager.Models;
 public class AppConfig
 {
     [JsonPropertyName("version")]
-    public string Version { get; set; } = "2.2.3";
+    public string Version { get; set; } = "1.0.0";
 
     [JsonPropertyName("clusters")]
     public List<ClusterConfig> Clusters { get; set; } = [];

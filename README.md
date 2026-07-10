@@ -1,9 +1,11 @@
 # Proxmox SPICE Connection Manager
 
-A desktop GUI application for managing and launching SPICE console sessions to Proxmox VE virtual machines. Built with Python and tkinter — no browser required.
+A desktop GUI application for managing and launching SPICE console sessions to Proxmox VE virtual machines. No browser required.
+
+- **Windows** — native WPF app (C#/.NET 8), single-file exe with zero dependencies
+- **Linux** — Python + tkinter
 
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)
-![Python](https://img.shields.io/badge/python-3.9%2B-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Features
@@ -47,14 +49,20 @@ sudo dnf install python3-tkinter python3-keyring virt-viewer
 sudo apt install python3-tk python3-keyring virt-viewer
 ```
 
-### Windows
+### Windows (WPF app — recommended)
+
+| Dependency | How to install |
+|---|---|
+| virt-viewer | [spice-space.org/download.html](https://www.spice-space.org/download.html) — install the Windows MSI |
+
+The WPF app is a self-contained single-file exe — no Python, no .NET runtime install needed.
+
+### Windows (Python — legacy)
 
 | Dependency | How to install |
 |---|---|
 | Python 3.9+ | [python.org](https://www.python.org/downloads/) — check "Add to PATH" during install |
 | virt-viewer | [spice-space.org/download.html](https://www.spice-space.org/download.html) — install the Windows MSI |
-
-No `pip install` required — the Windows edition uses only the Python standard library plus Windows DPAPI for encryption.
 
 ## Getting Started
 
@@ -87,7 +95,7 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 
 - **Linux:** Token secrets are stored in your desktop environment's keyring (GNOME Keyring, KDE Wallet, etc.) via the `keyring` Python package. They are never written to the JSON config file.
 - **Windows:** Token secrets are encrypted using Windows DPAPI (`CryptProtectData`), which ties the encryption key to your Windows user account. The encrypted blobs are stored as base64 in `connections.json`. They cannot be decrypted by another user or on another machine.
-- **SSL:** The app disables certificate verification for Proxmox API connections (self-signed certs are the default in Proxmox). All communication still uses HTTPS.
+- **SSL:** TLS certificate verification can be skipped per-cluster via the "Skip TLS verification" option (for self-signed certs, common in Proxmox). All communication still uses HTTPS.
 - **Export files** contain plaintext secrets — handle them accordingly.
 
 ## Tips
@@ -109,9 +117,10 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 ## Project Structure
 
 ```
+windows/                        # Native WPF Windows app (C#/.NET 8)
 proxmox_spice_common.py         # Shared base module (themes, API, dialogs, base class)
 proxmox-spice-manager.py        # Linux edition (keyring, .desktop export, icon picker)
-proxmox-spice-manager-win.py    # Windows edition (DPAPI, registry, shortcuts)
+proxmox-spice-manager-win.py    # Windows Python edition (DPAPI, registry, shortcuts)
 Proxmox SPICE Manager.spec      # PyInstaller config for building the Windows .exe
 README.md                       # This file
 proxmox-setup.md                # Proxmox server config and app setup (all platforms)
@@ -119,11 +128,11 @@ linux-setup.md                  # Linux installation walkthrough with screenshot
 build-windows.md                # Instructions for building a standalone Windows .exe
 ```
 
-Both platform scripts inherit from a shared base class in `proxmox_spice_common.py`. No external package dependencies beyond the platform prerequisites listed above.
+The Linux and Windows Python scripts inherit from a shared base class in `proxmox_spice_common.py`. The WPF app in `windows/` is a standalone C#/.NET 8 project with full feature parity.
 
 ## Version History
 
-- **2.2.3-wpf** — Native WPF Windows app: notes editing with dropdown, column filtering, parallel API refresh, single-instance guard
+- **1.0.0-wpf** — Native WPF Windows app (C#/.NET 8): full feature parity with Python version, notes editing with dropdown, column filtering, parallel API refresh, single-instance guard
 - **2.2.3** — Extract shared base module, fix PowerShell injection in shortcut creation
 - **2.2.2** — Add GitHub and Release Notes links in header
 - **2.2.1** — Filter UI redesign, power action UX, security hardening
