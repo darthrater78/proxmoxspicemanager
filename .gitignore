@@ -6,7 +6,3 @@ icon_preview.png
 # PyInstaller build artifacts
 build/
 dist/
-
-# .NET build artifacts
-windows/bin/
-windows/obj/
