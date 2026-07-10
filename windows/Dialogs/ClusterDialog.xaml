@@ -1,0 +1,89 @@
+<Window x:Class="ProxmoxSpiceManager.Dialogs.ClusterDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add Cluster" Height="520" Width="500"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        Background="{DynamicResource ThemeBase}">
+
+    <Window.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource ThemeSubtext0}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+        <Style x:Key="FieldInput" TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource ThemeSurface0}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource ThemeText}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeSurface1}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+        <Style x:Key="FieldPassword" TargetType="PasswordBox">
+            <Setter Property="Background" Value="{DynamicResource ThemeSurface0}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource ThemeText}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeSurface1}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Height="3" Background="{DynamicResource ThemeMauve}"/>
+
+        <StackPanel Orientation="Horizontal" DockPanel.Dock="Bottom"
+                    HorizontalAlignment="Right" Margin="24,0,24,20">
+            <Button Content="  Save  " IsDefault="True" Click="OnSave"
+                    Background="{DynamicResource ThemeBlue}" Foreground="{DynamicResource ThemeCrust}"
+                    FontWeight="Bold" Padding="18,6" BorderThickness="0" Cursor="Hand"/>
+            <Button Content="Cancel" IsCancel="True" Click="OnCancel" Margin="8,0,0,0"
+                    Background="{DynamicResource ThemeSurface1}" Foreground="{DynamicResource ThemeText}"
+                    Padding="18,6" BorderThickness="0" Cursor="Hand"/>
+        </StackPanel>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="24,20,24,12">
+            <StackPanel>
+                <TextBlock Text="CLUSTER NAME" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="NameBox" Style="{StaticResource FieldInput}"/>
+
+                <TextBlock Text="HOST URL (e.g. https://192.168.1.100:8006)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="HostBox" Style="{StaticResource FieldInput}" Text="https://"/>
+
+                <CheckBox x:Name="SkipTlsCheck" Content="Skip TLS verification (self-signed certificate)"
+                          Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,16"/>
+
+                <TextBlock Text="AUTHENTICATION" Style="{StaticResource FieldLabel}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                    <RadioButton x:Name="TokenRadio" Content="API Token" GroupName="Auth"
+                                 IsChecked="True" Foreground="{DynamicResource ThemeText}"
+                                 Checked="OnAuthChanged" Margin="0,0,20,0"/>
+                    <RadioButton x:Name="PasswordRadio" Content="Password" GroupName="Auth"
+                                 Foreground="{DynamicResource ThemeText}"
+                                 Checked="OnAuthChanged"/>
+                </StackPanel>
+
+                <!-- Token fields -->
+                <StackPanel x:Name="TokenPanel">
+                    <TextBlock Text="TOKEN ID  (user@realm!token)" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="TokenIdBox" Style="{StaticResource FieldInput}"/>
+
+                    <TextBlock Text="TOKEN SECRET" Style="{StaticResource FieldLabel}"/>
+                    <PasswordBox x:Name="TokenSecretBox" Style="{StaticResource FieldPassword}"/>
+                </StackPanel>
+
+                <!-- Password fields -->
+                <StackPanel x:Name="PasswordPanel" Visibility="Collapsed">
+                    <TextBlock Text="USERNAME" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="UsernameBox" Style="{StaticResource FieldInput}" Text="root@pam"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>
