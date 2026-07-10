@@ -76,7 +76,6 @@ public partial class ClusterDialog : Window
             Username = UsernameBox.Text.Trim(),
             SkipTlsVerify = SkipTlsCheck.IsChecked == true,
             TokenSecretEnc = _existing?.TokenSecretEnc,
-            Notes = _existing?.Notes,
         };
 
         DialogResult = true;

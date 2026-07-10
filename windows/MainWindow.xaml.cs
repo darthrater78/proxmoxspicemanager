@@ -1,10 +1,13 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using ProxmoxSpiceManager.Models;
 using ProxmoxSpiceManager.Services;
@@ -18,17 +21,30 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, (bool? Online, int? VmCount)> _clusterStatus = new();
     private readonly Dictionary<string, AuthInfo> _authCache = new();
     private ObservableCollection<VmDisplayItem> _vmItems = [];
+    private ICollectionView? _vmView;
+    private readonly Dictionary<string, string> _activeFilters = new();
+
+    // Exposed for XAML binding
+    public List<string> NoteOptionsList => _config.NoteOptions ?? [];
 
     public MainWindow()
     {
         InitializeComponent();
         _config = ConfigService.Load();
+        _config.NoteOptions ??= [];
+        _config.VmNotes ??= new Dictionary<string, string>();
         ConfigService.MigrateSecrets(_config);
 
         ThemeCombo.ItemsSource = Themes.All.Keys.ToList();
         ThemeCombo.SelectedItem = _config.Theme;
 
         VmGrid.ItemsSource = _vmItems;
+        _vmView = CollectionViewSource.GetDefaultView(_vmItems);
+        _vmView.Filter = VmFilterPredicate;
+
+        // Right-click on column headers — use Preview (tunneling) so it fires before DataGrid swallows it
+        VmGrid.PreviewMouseRightButtonUp += OnColumnHeaderRightClick;
+
         RefreshClusterList();
 
         if (_config.Clusters.Count > 0)
@@ -136,7 +152,7 @@ public partial class MainWindow : Window
     }
 
     // ── Auth ───────────────────────────────────────────────────────────────
-    private AuthInfo? GetAuth(ClusterConfig cluster)
+    private async Task<AuthInfo?> GetAuthAsync(ClusterConfig cluster)
     {
         if (_authCache.TryGetValue(cluster.Name, out var cached))
             return cached;
@@ -164,8 +180,8 @@ public partial class MainWindow : Window
         if (pwDlg.ShowDialog() != true || pwDlg.Password == null)
             return null;
 
-        var authResult = ProxmoxApi.AuthenticatePasswordAsync(
-            cluster.Host, cluster.Username, pwDlg.Password, cluster.SkipTlsVerify).Result;
+        var authResult = await ProxmoxApi.AuthenticatePasswordAsync(
+            cluster.Host, cluster.Username, pwDlg.Password, cluster.SkipTlsVerify);
 
         if (authResult == null)
         {
@@ -185,7 +201,7 @@ public partial class MainWindow : Window
         var cluster = _config.Clusters[_selectedClusterIdx];
         StatusLabel.Text = $"Loading VMs from {cluster.Name}...";
 
-        var auth = GetAuth(cluster);
+        var auth = await GetAuthAsync(cluster);
         if (auth == null)
         {
             _clusterStatus[cluster.Name] = (false, null);
@@ -193,9 +209,29 @@ public partial class MainWindow : Window
             return;
         }
 
-        var nodesJson = await ProxmoxApi.RequestAsync(
+        // Fetch pool memberships and node list in parallel
+        var resourcesTask = ProxmoxApi.RequestAsync(
+            cluster.Host, "/api2/json/cluster/resources?type=vm", auth: auth);
+        var nodesTask = ProxmoxApi.RequestAsync(
             cluster.Host, "/api2/json/nodes", auth: auth);
+        await Task.WhenAll(resourcesTask, nodesTask);
 
+        var poolMap = new Dictionary<int, string>();
+        var resourcesJson = await resourcesTask;
+        if (resourcesJson?.TryGetProperty("data", out var resData) == true)
+        {
+            foreach (var res in resData.EnumerateArray())
+            {
+                if (res.TryGetProperty("vmid", out var rvmid) &&
+                    res.TryGetProperty("pool", out var rpool) &&
+                    rpool.GetString() is string poolName && poolName.Length > 0)
+                {
+                    poolMap[rvmid.GetInt32()] = poolName;
+                }
+            }
+        }
+
+        var nodesJson = await nodesTask;
         if (nodesJson == null || !nodesJson.Value.TryGetProperty("data", out var nodesData))
         {
             StatusLabel.Text = $"Failed to connect to {cluster.Name}";
@@ -204,14 +240,22 @@ public partial class MainWindow : Window
             return;
         }
 
-        var vms = new List<VmDisplayItem>();
+        // Fetch per-node VM lists in parallel
+        var nodeNames = nodesData.EnumerateArray()
+            .Select(n => n.GetProperty("node").GetString() ?? "")
+            .Where(n => n.Length > 0)
+            .ToList();
 
-        foreach (var node in nodesData.EnumerateArray())
+        var nodeVmTasks = nodeNames.Select(nodeName =>
+            ProxmoxApi.RequestAsync(cluster.Host, $"/api2/json/nodes/{nodeName}/qemu", auth: auth)
+        ).ToList();
+        var nodeVmResults = await Task.WhenAll(nodeVmTasks);
+
+        // Collect all VMs with their node names, then fetch config+snapshot in parallel
+        var vmEntries = new List<(int vmid, string name, string status, string nodeName, string pool)>();
+        for (int i = 0; i < nodeNames.Count; i++)
         {
-            var nodeName = node.GetProperty("node").GetString() ?? "";
-            var vmJson = await ProxmoxApi.RequestAsync(
-                cluster.Host, $"/api2/json/nodes/{nodeName}/qemu", auth: auth);
-
+            var vmJson = nodeVmResults[i];
             if (vmJson == null || !vmJson.Value.TryGetProperty("data", out var vmData))
                 continue;
 
@@ -220,55 +264,66 @@ public partial class MainWindow : Window
                 var vmid = vm.GetProperty("vmid").GetInt32();
                 var name = vm.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
                 var status = vm.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
-                var pool = vm.TryGetProperty("pool", out var p) ? p.GetString() ?? "" : "";
+                var pool = poolMap.GetValueOrDefault(vmid, "");
+                vmEntries.Add((vmid, name, status, nodeNames[i], pool));
+            }
+        }
 
-                // Check for SPICE display
-                var configJson = await ProxmoxApi.RequestAsync(
-                    cluster.Host,
-                    $"/api2/json/nodes/{nodeName}/qemu/{vmid}/config",
-                    auth: auth);
+        // Fetch config for all VMs in parallel to check for SPICE display
+        var configTasks = vmEntries.Select(e =>
+            ProxmoxApi.RequestAsync(cluster.Host,
+                $"/api2/json/nodes/{e.nodeName}/qemu/{e.vmid}/config", auth: auth)
+        ).ToList();
+        var configResults = await Task.WhenAll(configTasks);
 
-                bool hasSpice = false;
-                if (configJson?.TryGetProperty("data", out var cfgData) == true)
+        // Filter to SPICE-enabled VMs, then fetch snapshots in parallel
+        var spiceVms = new List<(int vmid, string name, string status, string nodeName, string pool)>();
+        for (int i = 0; i < vmEntries.Count; i++)
+        {
+            bool hasSpice = false;
+            if (configResults[i]?.TryGetProperty("data", out var cfgData) == true)
+            {
+                foreach (var prop in cfgData.EnumerateObject())
                 {
-                    foreach (var prop in cfgData.EnumerateObject())
+                    if (prop.Name.StartsWith("vga") &&
+                        prop.Value.GetString()?.Contains("qxl") == true)
                     {
-                        if (prop.Name.StartsWith("vga") &&
-                            prop.Value.GetString()?.Contains("qxl") == true)
-                        {
-                            hasSpice = true;
-                            break;
-                        }
+                        hasSpice = true;
+                        break;
                     }
                 }
-                if (!hasSpice) continue;
-
-                // Get snapshot count
-                int snapCount = 0;
-                var snapJson = await ProxmoxApi.RequestAsync(
-                    cluster.Host,
-                    $"/api2/json/nodes/{nodeName}/qemu/{vmid}/snapshot",
-                    auth: auth);
-                if (snapJson?.TryGetProperty("data", out var snapData) == true)
-                {
-                    snapCount = snapData.EnumerateArray()
-                        .Count(s => s.TryGetProperty("name", out var sn) &&
-                                    sn.GetString() != "current");
-                }
-
-                var noteText = cluster.Notes?.GetValueOrDefault(vmid.ToString()) ?? "";
-
-                vms.Add(new VmDisplayItem
-                {
-                    VmId = vmid,
-                    Name = name,
-                    Node = nodeName,
-                    Pool = pool,
-                    Status = status,
-                    SnapCount = snapCount,
-                    Notes = noteText,
-                });
             }
+            if (hasSpice) spiceVms.Add(vmEntries[i]);
+        }
+
+        var snapTasks = spiceVms.Select(e =>
+            ProxmoxApi.RequestAsync(cluster.Host,
+                $"/api2/json/nodes/{e.nodeName}/qemu/{e.vmid}/snapshot", auth: auth)
+        ).ToList();
+        var snapResults = await Task.WhenAll(snapTasks);
+
+        var vms = new List<VmDisplayItem>();
+        for (int i = 0; i < spiceVms.Count; i++)
+        {
+            var e = spiceVms[i];
+            int snapCount = 0;
+            if (snapResults[i]?.TryGetProperty("data", out var snapData) == true)
+            {
+                snapCount = snapData.EnumerateArray()
+                    .Count(s => s.TryGetProperty("name", out var sn) &&
+                                sn.GetString() != "current");
+            }
+
+            vms.Add(new VmDisplayItem
+            {
+                VmId = e.vmid,
+                Name = e.name,
+                Node = e.nodeName,
+                Pool = e.pool,
+                Status = e.status,
+                SnapCount = snapCount,
+                Notes = LookupVmNote(e.vmid) ?? "",
+            });
         }
 
         _vmItems.Clear();
@@ -285,7 +340,8 @@ public partial class MainWindow : Window
     // ── VM Actions ─────────────────────────────────────────────────────────
     private List<VmDisplayItem> GetSelectedVms()
     {
-        var checked_ = _vmItems.Where(v => v.IsChecked).ToList();
+        var visible = (_vmView?.OfType<VmDisplayItem>() ?? _vmItems).ToHashSet();
+        var checked_ = _vmItems.Where(v => v.IsChecked && visible.Contains(v)).ToList();
         if (checked_.Count > 0) return checked_;
 
         if (VmGrid.SelectedItem is VmDisplayItem selected)
@@ -310,7 +366,7 @@ public partial class MainWindow : Window
 
         if (_selectedClusterIdx < 0) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
-        var auth = GetAuth(cluster);
+        var auth = await GetAuthAsync(cluster);
         if (auth == null) return;
 
         foreach (var vm in vms)
@@ -357,15 +413,17 @@ public partial class MainWindow : Window
 
         if (_selectedClusterIdx < 0) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
-        var auth = GetAuth(cluster);
+        var auth = await GetAuthAsync(cluster);
         if (auth == null) return;
 
         foreach (var vm in vms.Where(v => v.IsRunning))
         {
+            StatusLabel.Text = $"Requesting SPICE proxy for {vm.Name}...";
+
             var proxyJson = await ProxmoxApi.RequestAsync(
                 cluster.Host,
                 $"/api2/json/nodes/{vm.Node}/qemu/{vm.VmId}/spiceproxy",
-                "POST", auth, $"proxy={cluster.Host.Replace("https://", "").Split(':')[0]}");
+                "POST", auth);
 
             if (proxyJson?.TryGetProperty("data", out var data) != true)
             {
@@ -375,7 +433,13 @@ public partial class MainWindow : Window
 
             var vvContent = "[virt-viewer]\n";
             foreach (var prop in data.EnumerateObject())
-                vvContent += $"{prop.Name.Replace("_", "-")}={prop.Value.GetString()}\n";
+            {
+                var key = prop.Name.Replace("_", "-");
+                var val = prop.Value.ValueKind == System.Text.Json.JsonValueKind.Number
+                    ? prop.Value.GetRawText()
+                    : prop.Value.GetString() ?? "";
+                vvContent += $"{key}={val}\n";
+            }
             vvContent += "delete-this-file=1\n";
 
             var vvPath = Path.Combine(Path.GetTempPath(), $"pve-spice-{vm.VmId}.vv");
@@ -386,10 +450,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnVmDoubleClick(object sender, MouseButtonEventArgs e)
+    private void OnNameDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (VmGrid.SelectedItem is VmDisplayItem vm && vm.IsRunning)
+        if (e.ClickCount == 2 && sender is FrameworkElement fe &&
+            fe.DataContext is VmDisplayItem vm && vm.IsRunning)
+        {
             OnLaunchSpice(sender, new RoutedEventArgs());
+        }
     }
 
     private void OnVmSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -398,8 +465,18 @@ public partial class MainWindow : Window
         CheckCountLabel.Text = count > 0 ? $"{count} checked" : "";
     }
 
+    private void OnSelectAllCheckBox(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.CheckBox cb) return;
+        bool check = cb.IsChecked == true;
+        foreach (var item in _vmView?.OfType<VmDisplayItem>() ?? [])
+            item.IsChecked = check;
+        var count = _vmItems.Count(v => v.IsChecked);
+        CheckCountLabel.Text = count > 0 ? $"{count} checked" : "";
+    }
+
     // ── Snapshots ──────────────────────────────────────────────────────────
-    private void OnSnapshots(object sender, RoutedEventArgs e)
+    private async void OnSnapshots(object sender, RoutedEventArgs e)
     {
         var vms = GetSelectedVms();
         if (vms.Count != 1)
@@ -410,7 +487,7 @@ public partial class MainWindow : Window
         }
         if (_selectedClusterIdx < 0) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
-        var auth = GetAuth(cluster);
+        var auth = await GetAuthAsync(cluster);
         if (auth == null) return;
 
         var dlg = new Dialogs.SnapshotDialog(vms[0], cluster, auth) { Owner = this };
@@ -430,7 +507,7 @@ public partial class MainWindow : Window
 
         if (_selectedClusterIdx < 0) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
-        var auth = GetAuth(cluster);
+        var auth = await GetAuthAsync(cluster);
         if (auth == null) return;
 
         var vm = vms[0];
@@ -576,6 +653,358 @@ public partial class MainWindow : Window
         else
             MessageBox.Show("remote-viewer.exe not found.\nDownload virt-viewer from spice-space.org.",
                 "Missing Dependency", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    // ── Notes ──────────────────────────────────────────────────────────────
+    private string VmNoteKey(int vmid)
+    {
+        if (_selectedClusterIdx >= 0 && _selectedClusterIdx < _config.Clusters.Count)
+            return $"{_config.Clusters[_selectedClusterIdx].Name}:{vmid}";
+        return vmid.ToString();
+    }
+
+    private string? LookupVmNote(int vmid)
+    {
+        _config.VmNotes ??= new Dictionary<string, string>();
+        var compositeKey = VmNoteKey(vmid);
+        if (_config.VmNotes.TryGetValue(compositeKey, out var note))
+            return note;
+        // Backward compat: fall back to plain vmid key
+        if (_config.VmNotes.TryGetValue(vmid.ToString(), out var legacyNote))
+            return legacyNote;
+        return null;
+    }
+
+    private void SaveVmNote(VmDisplayItem vm)
+    {
+        _config.VmNotes ??= new Dictionary<string, string>();
+        var key = VmNoteKey(vm.VmId);
+        // Remove legacy plain-vmid key if present
+        _config.VmNotes.Remove(vm.VmId.ToString());
+        if (string.IsNullOrWhiteSpace(vm.Notes))
+            _config.VmNotes.Remove(key);
+        else
+            _config.VmNotes[key] = vm.Notes;
+
+        if (!string.IsNullOrWhiteSpace(vm.Notes))
+        {
+            _config.NoteOptions ??= [];
+            if (!_config.NoteOptions.Contains(vm.Notes))
+                _config.NoteOptions.Add(vm.Notes);
+        }
+
+        SaveConfig();
+    }
+
+    private void OnNotesComboLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ComboBox combo)
+        {
+            combo.ItemsSource = _config.NoteOptions ?? [];
+            combo.IsDropDownOpen = true;
+        }
+    }
+
+    private void OnNotesComboLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is ComboBox combo && combo.DataContext is VmDisplayItem vm)
+        {
+            var newText = combo.Text?.Trim() ?? "";
+            if (vm.Notes != newText)
+            {
+                vm.Notes = newText;
+                SaveVmNote(vm);
+            }
+        }
+    }
+
+    private void OnManageNotes(object sender, RoutedEventArgs e)
+    {
+        _config.NoteOptions ??= [];
+        var dlg = new Dialogs.ManageNotesDialog(_config.NoteOptions) { Owner = this };
+        if (dlg.ShowDialog() == true)
+        {
+            _config.NoteOptions = dlg.GetOptions();
+            SaveConfig();
+        }
+    }
+
+    // ── Column Filtering ──────────────────────────────────────────────────
+    private bool VmFilterPredicate(object obj)
+    {
+        if (obj is not VmDisplayItem vm) return false;
+        foreach (var kvp in _activeFilters)
+        {
+            var val = kvp.Value;
+            if (string.IsNullOrEmpty(val)) continue;
+
+            string field = kvp.Key.ToLowerInvariant() switch
+            {
+                "name" => vm.Name,
+                "node" => vm.Node,
+                "pool" => vm.Pool,
+                "status" => vm.Status,
+                "notes" => vm.Notes,
+                _ => ""
+            };
+
+            if (kvp.Key.Equals("name", StringComparison.OrdinalIgnoreCase))
+            {
+                // Substring search for name
+                if (!field.Contains(val, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            else
+            {
+                // Exact match for other columns
+                if (!field.Equals(val, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private void OnColumnHeaderRightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not FrameworkElement fe) return;
+
+        // Walk up to find the DataGridColumnHeader
+        var header = FindParent<DataGridColumnHeader>(fe);
+        if (header?.Column == null) return;
+
+        var colName = GetColumnFieldName(header.Column);
+        if (colName == null) return;
+
+        ShowFilterPopup(header, colName);
+    }
+
+    private static T? FindParent<T>(DependencyObject child) where T : DependencyObject
+    {
+        var parent = System.Windows.Media.VisualTreeHelper.GetParent(child);
+        while (parent != null)
+        {
+            if (parent is T t) return t;
+            parent = System.Windows.Media.VisualTreeHelper.GetParent(parent);
+        }
+        return null;
+    }
+
+    private string? GetColumnFieldName(DataGridColumn col)
+    {
+        if (col is DataGridBoundColumn bound && bound.Binding is Binding b)
+            return b.Path?.Path;
+        if (col is DataGridTemplateColumn tmpl)
+        {
+            var sort = tmpl.SortMemberPath;
+            if (!string.IsNullOrEmpty(sort)) return sort;
+        }
+        // Fallback: match by header text
+        var hdr = col.Header?.ToString()?.Trim() ?? "";
+        // Strip filter indicator
+        hdr = hdr.Replace(" \U0001f53d", "");
+        return hdr.ToLowerInvariant() switch
+        {
+            "name" => "Name",
+            "node" => "Node",
+            "pool" => "Pool",
+            "status" => "Status",
+            "notes" => "Notes",
+            _ => null
+        };
+    }
+
+    private void ShowFilterPopup(DataGridColumnHeader header, string colName)
+    {
+        var popup = new Popup
+        {
+            PlacementTarget = header,
+            Placement = PlacementMode.Bottom,
+            StaysOpen = false,
+            AllowsTransparency = true,
+        };
+
+        var border = new Border
+        {
+            Background = (System.Windows.Media.Brush)FindResource("ThemeSurface0"),
+            BorderBrush = (System.Windows.Media.Brush)FindResource("ThemeSurface2"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(10),
+            MinWidth = 180,
+        };
+
+        var panel = new StackPanel();
+
+        var title = new TextBlock
+        {
+            Text = $"Filter: {colName.ToUpper()}",
+            Foreground = (System.Windows.Media.Brush)FindResource("ThemeSubtext0"),
+            FontSize = 11,
+            FontWeight = FontWeights.Bold,
+            Margin = new Thickness(0, 0, 0, 6),
+        };
+        panel.Children.Add(title);
+
+        if (colName.Equals("Name", StringComparison.OrdinalIgnoreCase))
+        {
+            // Text input for substring search
+            var textBox = new TextBox
+            {
+                Text = _activeFilters.GetValueOrDefault(colName, ""),
+                Background = (System.Windows.Media.Brush)FindResource("ThemeSurface1"),
+                Foreground = (System.Windows.Media.Brush)FindResource("ThemeText"),
+                CaretBrush = (System.Windows.Media.Brush)FindResource("ThemeText"),
+                BorderThickness = new Thickness(1),
+                BorderBrush = (System.Windows.Media.Brush)FindResource("ThemeSurface2"),
+                Padding = new Thickness(6, 4, 6, 4),
+                FontSize = 12,
+                MinWidth = 150,
+            };
+            panel.Children.Add(textBox);
+
+            var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+
+            var applyBtn = new Button
+            {
+                Content = "Apply",
+                Padding = new Thickness(10, 4, 10, 4),
+                Background = (System.Windows.Media.Brush)FindResource("ThemeBlue"),
+                Foreground = (System.Windows.Media.Brush)FindResource("ThemeCrust"),
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 0, 6, 0),
+            };
+            applyBtn.Click += (_, _) =>
+            {
+                var val = textBox.Text.Trim();
+                if (string.IsNullOrEmpty(val))
+                    _activeFilters.Remove(colName);
+                else
+                    _activeFilters[colName] = val;
+                ApplyFilters();
+                UpdateColumnHeaders();
+                popup.IsOpen = false;
+            };
+            btnPanel.Children.Add(applyBtn);
+
+            var clearBtn = new Button
+            {
+                Content = "Clear",
+                Padding = new Thickness(10, 4, 10, 4),
+                Background = (System.Windows.Media.Brush)FindResource("ThemeSurface1"),
+                Foreground = (System.Windows.Media.Brush)FindResource("ThemeText"),
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+            };
+            clearBtn.Click += (_, _) =>
+            {
+                _activeFilters.Remove(colName);
+                ApplyFilters();
+                UpdateColumnHeaders();
+                popup.IsOpen = false;
+            };
+            btnPanel.Children.Add(clearBtn);
+
+            panel.Children.Add(btnPanel);
+        }
+        else
+        {
+            // ComboBox with distinct values
+            var distinctValues = _vmItems
+                .Select(vm => colName switch
+                {
+                    "Node" => vm.Node,
+                    "Pool" => vm.Pool,
+                    "Status" => vm.Status,
+                    "Notes" => vm.Notes,
+                    _ => ""
+                })
+                .Where(v => !string.IsNullOrEmpty(v))
+                .Distinct()
+                .OrderBy(v => v)
+                .ToList();
+
+            distinctValues.Insert(0, "All");
+
+            var combo = new ComboBox
+            {
+                ItemsSource = distinctValues,
+                SelectedItem = _activeFilters.ContainsKey(colName) ? _activeFilters[colName] : "All",
+                Background = (System.Windows.Media.Brush)FindResource("ThemeSurface1"),
+                Foreground = (System.Windows.Media.Brush)FindResource("ThemeText"),
+                BorderThickness = new Thickness(1),
+                BorderBrush = (System.Windows.Media.Brush)FindResource("ThemeSurface2"),
+                FontSize = 12,
+                MinWidth = 150,
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                if (combo.SelectedItem is string val)
+                {
+                    if (val == "All")
+                        _activeFilters.Remove(colName);
+                    else
+                        _activeFilters[colName] = val;
+                    ApplyFilters();
+                    UpdateColumnHeaders();
+                    popup.IsOpen = false;
+                }
+            };
+            panel.Children.Add(combo);
+
+            var clearBtn = new Button
+            {
+                Content = "Clear",
+                Padding = new Thickness(10, 4, 10, 4),
+                Background = (System.Windows.Media.Brush)FindResource("ThemeSurface1"),
+                Foreground = (System.Windows.Media.Brush)FindResource("ThemeText"),
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            clearBtn.Click += (_, _) =>
+            {
+                _activeFilters.Remove(colName);
+                ApplyFilters();
+                UpdateColumnHeaders();
+                popup.IsOpen = false;
+            };
+            panel.Children.Add(clearBtn);
+        }
+
+        border.Child = panel;
+        popup.Child = border;
+        popup.IsOpen = true;
+    }
+
+    private void ApplyFilters()
+    {
+        _vmView?.Refresh();
+        ClearAllFiltersBtn.Visibility = _activeFilters.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void UpdateColumnHeaders()
+    {
+        foreach (var col in VmGrid.Columns)
+        {
+            var fieldName = GetColumnFieldName(col);
+            if (fieldName == null) continue;
+
+            var baseName = fieldName.ToUpperInvariant();
+            if (_activeFilters.ContainsKey(fieldName))
+                col.Header = $"{baseName} \U0001f53d";
+            else
+                col.Header = baseName;
+        }
+    }
+
+    private void OnClearAllFilters(object sender, RoutedEventArgs e)
+    {
+        _activeFilters.Clear();
+        ApplyFilters();
+        UpdateColumnHeaders();
     }
 
     private void OnCreateShortcut(object sender, RoutedEventArgs e)

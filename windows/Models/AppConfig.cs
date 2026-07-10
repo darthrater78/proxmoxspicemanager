@@ -18,6 +18,12 @@ public class AppConfig
 
     [JsonPropertyName("prereqs_ok")]
     public bool PrereqsOk { get; set; }
+
+    [JsonPropertyName("note_options")]
+    public List<string>? NoteOptions { get; set; }
+
+    [JsonPropertyName("vm_notes")]
+    public Dictionary<string, string>? VmNotes { get; set; }
 }
 
 public class ClusterConfig
@@ -42,7 +48,4 @@ public class ClusterConfig
 
     [JsonPropertyName("token_secret_enc")]
     public string? TokenSecretEnc { get; set; }
-
-    [JsonPropertyName("notes")]
-    public Dictionary<string, string>? Notes { get; set; }
 }

@@ -123,6 +123,7 @@ Both platform scripts inherit from a shared base class in `proxmox_spice_common.
 
 ## Version History
 
+- **2.2.3-wpf** — Native WPF Windows app: notes editing with dropdown, column filtering, parallel API refresh, single-instance guard
 - **2.2.3** — Extract shared base module, fix PowerShell injection in shortcut creation
 - **2.2.2** — Add GitHub and Release Notes links in header
 - **2.2.1** — Filter UI redesign, power action UX, security hardening

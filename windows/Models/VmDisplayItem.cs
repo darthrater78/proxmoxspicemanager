@@ -15,7 +15,12 @@ public class VmDisplayItem : INotifyPropertyChanged
     public string Pool { get; set; } = "";
     public int SnapCount { get; set; }
     public string Status { get; set; } = "";
-    public string Notes { get; set; } = "";
+    private string _notes = "";
+    public string Notes
+    {
+        get => _notes;
+        set { _notes = value; OnPropertyChanged(); }
+    }
 
     public bool IsChecked
     {

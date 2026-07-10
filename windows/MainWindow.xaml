@@ -226,6 +226,13 @@
                             <Button Content=" Quick Rollback " Style="{StaticResource FlatButton}"
                                     Foreground="{DynamicResource ThemePeach}" Padding="10,8"
                                     Click="OnQuickRollback" Margin="0,0,4,0"/>
+                            <Button Content=" Notes &#x2699; " Style="{StaticResource FlatButton}"
+                                    Foreground="{DynamicResource ThemeTeal}" Padding="10,8"
+                                    Click="OnManageNotes" Margin="0,0,4,0"/>
+                            <Button x:Name="ClearAllFiltersBtn" Content=" Clear All Filters " Style="{StaticResource FlatButton}"
+                                    Foreground="{DynamicResource ThemeRed}" Padding="10,8"
+                                    Click="OnClearAllFilters" Margin="0,0,4,0"
+                                    Visibility="Collapsed"/>
 
                             <TextBlock x:Name="CheckCountLabel" Foreground="{DynamicResource ThemeSapphire}"
                                        FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
@@ -250,12 +257,12 @@
                               IsReadOnly="False" SelectionMode="Extended"
                               CanUserSortColumns="True" CanUserResizeColumns="True"
                               CanUserReorderColumns="True"
+                              CanUserAddRows="False"
                               Background="{DynamicResource ThemeSurface0}"
                               Foreground="{DynamicResource ThemeText}"
                               BorderThickness="0" GridLinesVisibility="None"
                               RowHeight="34" HeadersVisibility="Column"
                               FontFamily="Segoe UI" FontSize="12"
-                              MouseDoubleClick="OnVmDoubleClick"
                               SelectionChanged="OnVmSelectionChanged">
 
                         <DataGrid.ColumnHeaderStyle>
@@ -267,6 +274,7 @@
                                 <Setter Property="Padding" Value="10,8"/>
                                 <Setter Property="BorderThickness" Value="0,0,1,0"/>
                                 <Setter Property="BorderBrush" Value="{DynamicResource ThemeSurface2}"/>
+                                <Setter Property="ToolTip" Value="Right-click to filter"/>
                             </Style>
                         </DataGrid.ColumnHeaderStyle>
 
@@ -310,12 +318,27 @@
 
                         <DataGrid.Columns>
                             <DataGridCheckBoxColumn Binding="{Binding IsChecked, UpdateSourceTrigger=PropertyChanged}"
-                                                     Header="☐" Width="40"/>
-                            <DataGridTextColumn Binding="{Binding VmId}" Header="VMID" Width="70"/>
-                            <DataGridTextColumn Binding="{Binding Name}" Header="NAME" Width="220"/>
-                            <DataGridTextColumn Binding="{Binding Node}" Header="NODE" Width="120"/>
-                            <DataGridTextColumn Binding="{Binding Pool}" Header="POOL" Width="100"/>
-                            <DataGridTextColumn Binding="{Binding SnapCount}" Header="SNAPS" Width="70"/>
+                                                     Width="40">
+                                <DataGridCheckBoxColumn.HeaderTemplate>
+                                    <DataTemplate>
+                                        <CheckBox x:Name="SelectAllCheckBox"
+                                                  Click="OnSelectAllCheckBox"
+                                                  VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                    </DataTemplate>
+                                </DataGridCheckBoxColumn.HeaderTemplate>
+                            </DataGridCheckBoxColumn>
+                            <DataGridTextColumn Binding="{Binding VmId}" Header="VMID" Width="70" IsReadOnly="True"/>
+                            <DataGridTemplateColumn Header="NAME" Width="220" SortMemberPath="Name" IsReadOnly="True">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
+                                                   MouseLeftButtonDown="OnNameDoubleClick" Cursor="Hand"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Binding="{Binding Node}" Header="NODE" Width="120" IsReadOnly="True"/>
+                            <DataGridTextColumn Binding="{Binding Pool}" Header="POOL" Width="100" IsReadOnly="True"/>
+                            <DataGridTextColumn Binding="{Binding SnapCount}" Header="SNAPS" Width="70" IsReadOnly="True"/>
                             <DataGridTemplateColumn Header="STATUS" Width="120" SortMemberPath="Status">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -328,7 +351,25 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Binding="{Binding Notes}" Header="NOTES" Width="*"/>
+                            <DataGridTemplateColumn Header="NOTES" Width="*" SortMemberPath="Notes">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Notes}" VerticalAlignment="Center"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <ComboBox x:Name="NotesCombo" IsEditable="True"
+                                                  Text="{Binding Notes, UpdateSourceTrigger=Explicit}"
+                                                  ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=NoteOptionsList}"
+                                                  Loaded="OnNotesComboLoaded"
+                                                  LostFocus="OnNotesComboLostFocus"
+                                                  Background="{DynamicResource ThemeSurface0}"
+                                                  Foreground="{DynamicResource ThemeText}"
+                                                  BorderThickness="0" FontSize="12"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
                 </DockPanel>
