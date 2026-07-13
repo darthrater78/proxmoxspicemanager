@@ -133,6 +133,7 @@ The Linux and Windows Python scripts inherit from a shared base class in `proxmo
 
 ## Version History
 
+- **1.1.1-wpf** — Fix notes ComboBox theming (dark background for edit field, dropdown, and selected item), adjust column widths for IP column fit
 - **1.1.0-wpf** — Add live VM IP address column (via QEMU guest agent), running/stopped row color differentiation, release notes link uses /releases/latest
 - **1.0.0-wpf** — Native WPF Windows app (C#/.NET 8): full feature parity with Python version, notes editing with dropdown, column filtering, parallel API refresh, single-instance guard
 - **2.2.3** — Extract shared base module, fix PowerShell injection in shortcut creation

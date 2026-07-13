@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Media;
 using System.Windows.Input;
 using ProxmoxSpiceManager.Models;
 using ProxmoxSpiceManager.Services;
@@ -736,8 +737,40 @@ public partial class MainWindow : Window
         {
             combo.ItemsSource = _config.NoteOptions ?? [];
             combo.IsDropDownOpen = true;
+            combo.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, () =>
+            {
+                var bg = (Brush)FindResource("ThemeSurface0");
+                var fg = (Brush)FindResource("ThemeText");
+                ThemeComboBoxVisualTree(combo, bg, fg);
+            });
         }
     }
+
+    private static void ThemeComboBoxVisualTree(DependencyObject parent,
+        Brush bg, Brush fg)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is System.Windows.Controls.TextBox tb)
+            {
+                tb.Background = bg;
+                tb.Foreground = fg;
+                tb.CaretBrush = fg;
+            }
+            else if (child is Border border)
+            {
+                if (border.Background is SolidColorBrush scb && IsLightColor(scb.Color))
+                    border.Background = bg;
+                if (border.BorderBrush is SolidColorBrush bscb && IsLightColor(bscb.Color))
+                    border.BorderBrush = bg;
+            }
+            ThemeComboBoxVisualTree(child, bg, fg);
+        }
+    }
+
+    private static bool IsLightColor(Color c)
+        => c.R > 200 && c.G > 200 && c.B > 200;
 
     private void OnNotesComboLostFocus(object sender, RoutedEventArgs e)
     {
@@ -859,8 +892,8 @@ public partial class MainWindow : Window
 
         var border = new Border
         {
-            Background = (System.Windows.Media.Brush)FindResource("ThemeSurface0"),
-            BorderBrush = (System.Windows.Media.Brush)FindResource("ThemeSurface2"),
+            Background = (Brush)FindResource("ThemeSurface0"),
+            BorderBrush = (Brush)FindResource("ThemeSurface2"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(10),
@@ -872,7 +905,7 @@ public partial class MainWindow : Window
         var title = new TextBlock
         {
             Text = $"Filter: {colName.ToUpper()}",
-            Foreground = (System.Windows.Media.Brush)FindResource("ThemeSubtext0"),
+            Foreground = (Brush)FindResource("ThemeSubtext0"),
             FontSize = 11,
             FontWeight = FontWeights.Bold,
             Margin = new Thickness(0, 0, 0, 6),
@@ -885,11 +918,11 @@ public partial class MainWindow : Window
             var textBox = new TextBox
             {
                 Text = _activeFilters.GetValueOrDefault(colName, ""),
-                Background = (System.Windows.Media.Brush)FindResource("ThemeSurface1"),
-                Foreground = (System.Windows.Media.Brush)FindResource("ThemeText"),
-                CaretBrush = (System.Windows.Media.Brush)FindResource("ThemeText"),
+                Background = (Brush)FindResource("ThemeSurface1"),
+                Foreground = (Brush)FindResource("ThemeText"),
+                CaretBrush = (Brush)FindResource("ThemeText"),
                 BorderThickness = new Thickness(1),
-                BorderBrush = (System.Windows.Media.Brush)FindResource("ThemeSurface2"),
+                BorderBrush = (Brush)FindResource("ThemeSurface2"),
                 Padding = new Thickness(6, 4, 6, 4),
                 FontSize = 12,
                 MinWidth = 150,
@@ -902,8 +935,8 @@ public partial class MainWindow : Window
             {
                 Content = "Apply",
                 Padding = new Thickness(10, 4, 10, 4),
-                Background = (System.Windows.Media.Brush)FindResource("ThemeBlue"),
-                Foreground = (System.Windows.Media.Brush)FindResource("ThemeCrust"),
+                Background = (Brush)FindResource("ThemeBlue"),
+                Foreground = (Brush)FindResource("ThemeCrust"),
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
                 Margin = new Thickness(0, 0, 6, 0),
@@ -925,8 +958,8 @@ public partial class MainWindow : Window
             {
                 Content = "Clear",
                 Padding = new Thickness(10, 4, 10, 4),
-                Background = (System.Windows.Media.Brush)FindResource("ThemeSurface1"),
-                Foreground = (System.Windows.Media.Brush)FindResource("ThemeText"),
+                Background = (Brush)FindResource("ThemeSurface1"),
+                Foreground = (Brush)FindResource("ThemeText"),
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
             };
@@ -964,10 +997,10 @@ public partial class MainWindow : Window
             {
                 ItemsSource = distinctValues,
                 SelectedItem = _activeFilters.ContainsKey(colName) ? _activeFilters[colName] : "All",
-                Background = (System.Windows.Media.Brush)FindResource("ThemeSurface1"),
-                Foreground = (System.Windows.Media.Brush)FindResource("ThemeText"),
+                Background = (Brush)FindResource("ThemeSurface1"),
+                Foreground = (Brush)FindResource("ThemeText"),
                 BorderThickness = new Thickness(1),
-                BorderBrush = (System.Windows.Media.Brush)FindResource("ThemeSurface2"),
+                BorderBrush = (Brush)FindResource("ThemeSurface2"),
                 FontSize = 12,
                 MinWidth = 150,
             };
@@ -990,8 +1023,8 @@ public partial class MainWindow : Window
             {
                 Content = "Clear",
                 Padding = new Thickness(10, 4, 10, 4),
-                Background = (System.Windows.Media.Brush)FindResource("ThemeSurface1"),
-                Foreground = (System.Windows.Media.Brush)FindResource("ThemeText"),
+                Background = (Brush)FindResource("ThemeSurface1"),
+                Foreground = (Brush)FindResource("ThemeText"),
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
                 Margin = new Thickness(0, 8, 0, 0),
