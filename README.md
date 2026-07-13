@@ -12,6 +12,7 @@ A desktop GUI application for managing and launching SPICE console sessions to P
 
 - **Multi-cluster management** — connect to multiple Proxmox clusters with saved credentials
 - **Auto-discovery** — automatically detects SPICE-enabled VMs across all cluster nodes
+- **Live IP address** — shows each running VM's IP via QEMU guest agent (requires `VM.GuestAgent.Audit` permission)
 - **One-click SPICE launch** — opens `remote-viewer` sessions with a double-click
 - **VM power controls** — Start, ACPI Shutdown, and Force Stop with multi-select support
 - **Snapshot management** — create, rollback, and delete snapshots with a full dialog, plus quick-rollback to the latest snapshot
@@ -132,6 +133,7 @@ The Linux and Windows Python scripts inherit from a shared base class in `proxmo
 
 ## Version History
 
+- **1.1.0-wpf** — Add live VM IP address column (via QEMU guest agent), running/stopped row color differentiation, release notes link uses /releases/latest
 - **1.0.0-wpf** — Native WPF Windows app (C#/.NET 8): full feature parity with Python version, notes editing with dropdown, column filtering, parallel API refresh, single-instance guard
 - **2.2.3** — Extract shared base module, fix PowerShell injection in shortcut creation
 - **2.2.2** — Add GitHub and Release Notes links in header

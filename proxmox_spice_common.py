@@ -1044,7 +1044,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         table_frame = tk.Frame(content, bg=C["base"])
         table_frame.pack(fill="both", expand=True, padx=16, pady=(10, 0))
 
-        columns = ("check", "vmid", "name", "node", "pool", "snaps", "status", "notes")
+        columns = ("check", "vmid", "name", "ip", "node", "pool", "snaps", "status", "notes")
         self.vm_tree = ttk.Treeview(
             table_frame, columns=columns, show="headings",
             selectmode="extended", height=12,
@@ -1083,6 +1083,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
 
         self.vm_tree.column("vmid", width=70, minwidth=50, anchor="center")
         self.vm_tree.column("name", width=220, minwidth=120)
+        self.vm_tree.column("ip", width=130, minwidth=80)
         self.vm_tree.column("node", width=120, minwidth=80)
         self.vm_tree.column("pool", width=100, minwidth=60)
         self.vm_tree.column("snaps", width=70, minwidth=50, anchor="center")
@@ -1457,6 +1458,25 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                     vm["_snap_count"] = len(
                         [s for s in snaps if s.get("name") != "current"]
                     )
+                    ip_addr = ""
+                    if vm.get("status") == "running":
+                        agent_data = api_request(
+                            cluster["host"],
+                            f"/api2/json/nodes/{vm.get('node')}"
+                            f"/qemu/{vm.get('vmid')}/agent/network-get-interfaces",
+                            auth=auth,
+                        )
+                        if "error" not in agent_data:
+                            for iface in agent_data.get("data", {}).get("result", []):
+                                if iface.get("name") == "lo":
+                                    continue
+                                for addr in iface.get("ip-addresses", []):
+                                    if addr.get("ip-address-type") == "ipv4":
+                                        ip_addr = addr.get("ip-address", "")
+                                        break
+                                if ip_addr:
+                                    break
+                    vm["_ip_address"] = ip_addr
                     spice_vms.append(vm)
 
             def update_ui():
@@ -1481,6 +1501,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                     note = self.config_data.get("vm_notes", {}).get(vmid_str, "")
                     row = (
                         vmid_str, vm.get("name", "unnamed"),
+                        vm.get("_ip_address", ""),
                         vm.get("node", "?"), vm.get("pool", "—"),
                         snap_display, display_status, note,
                     )
@@ -1567,7 +1588,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         )
         title.pack(fill="x", padx=8, pady=(6, 2))
 
-        col_indices = {"vmid": 0, "name": 1, "node": 2, "pool": 3, "snaps": 4, "status": 5, "notes": 6}
+        col_indices = {"vmid": 0, "name": 1, "ip": 2, "node": 3, "pool": 4, "snaps": 5, "status": 6, "notes": 7}
         current_val = self._active_filters.get(col_name, "")
 
         if col_name == "name":
@@ -1666,7 +1687,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
     def _apply_filters(self):
         if not hasattr(self, "_all_vm_rows"):
             return
-        col_indices = {"vmid": 0, "name": 1, "node": 2, "pool": 3, "snaps": 4, "status": 5, "notes": 6}
+        col_indices = {"vmid": 0, "name": 1, "ip": 2, "node": 3, "pool": 4, "snaps": 5, "status": 6, "notes": 7}
         filters = {k: v.lower() for k, v in self._active_filters.items() if v}
 
         self.vm_tree.delete(*self.vm_tree.get_children())
@@ -1876,7 +1897,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
 
         values = self.vm_tree.item(iid, "values")
         vmid = values[1]
-        current = values[7] if len(values) > 7 else ""
+        current = values[8] if len(values) > 8 else ""
 
         options = self.config_data.get("note_options", [])
         combo_values = [""] + options
@@ -2009,10 +2030,10 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             values = self.vm_tree.item(iid, "values")
             if values[0] != "☑":
                 continue
-            status = values[6].replace("● ", "").replace("○ ", "").strip()
+            status = values[7].replace("● ", "").replace("○ ", "").strip()
             vms.append({
-                "vmid": values[1], "name": values[2], "node": values[3],
-                "pool": values[4], "snaps": values[5], "status": status,
+                "vmid": values[1], "name": values[2], "node": values[4],
+                "pool": values[5], "snaps": values[6], "status": status,
             })
         return vms
 
@@ -2024,10 +2045,10 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             messagebox.showinfo("Single Selection", "Select a single VM.", parent=self)
             return None
         values = self.vm_tree.item(sel[0], "values")
-        status = values[6].replace("● ", "").replace("○ ", "").strip()
+        status = values[7].replace("● ", "").replace("○ ", "").strip()
         return {
-            "vmid": values[1], "name": values[2], "node": values[3],
-            "pool": values[4], "snaps": values[5], "status": status,
+            "vmid": values[1], "name": values[2], "node": values[4],
+            "pool": values[5], "snaps": values[6], "status": status,
         }
 
     def _on_vm_double_click(self, event):
