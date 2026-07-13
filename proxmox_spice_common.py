@@ -22,7 +22,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.2.3"
+APP_VERSION = "2.2.4"
 
 # ─── Theme Definitions ────────────────────────────────────────────────────────
 THEMES = {
@@ -1063,7 +1063,6 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         style.map(
             "Treeview",
             background=[("selected", C["surface1"])],
-            foreground=[("selected", C["blue"])],
         )
         style.map("Treeview.Heading", background=[("active", C["surface2"])])
 

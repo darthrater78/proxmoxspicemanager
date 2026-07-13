@@ -9,7 +9,7 @@
     <ApplicationIcon>..\icon.ico</ApplicationIcon>
     <AssemblyName>Proxmox-SPICE-Manager</AssemblyName>
     <RootNamespace>ProxmoxSpiceManager</RootNamespace>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

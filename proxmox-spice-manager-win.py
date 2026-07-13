@@ -40,7 +40,7 @@ APPDATA = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
 CONFIG_DIR = APPDATA / "proxmox-spice"
 CONFIG_FILE = CONFIG_DIR / "connections.json"
 APP_ID = "proxmox-spice-manager"
-APP_VERSION_WIN = "2.2.3-win"
+APP_VERSION_WIN = "2.2.4-win"
 
 FONT = "Segoe UI"
 MONO = "Consolas"
