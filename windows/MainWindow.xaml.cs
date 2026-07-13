@@ -300,7 +300,15 @@ public partial class MainWindow : Window
             ProxmoxApi.RequestAsync(cluster.Host,
                 $"/api2/json/nodes/{e.nodeName}/qemu/{e.vmid}/snapshot", auth: auth)
         ).ToList();
+        var ipTasks = spiceVms.Select(e =>
+            e.status.Equals("running", StringComparison.OrdinalIgnoreCase)
+                ? ProxmoxApi.RequestAsync(cluster.Host,
+                    $"/api2/json/nodes/{e.nodeName}/qemu/{e.vmid}/agent/network-get-interfaces", auth: auth)
+                : Task.FromResult<JsonElement?>(null)
+        ).ToList();
+        await Task.WhenAll(snapTasks.Concat(ipTasks));
         var snapResults = await Task.WhenAll(snapTasks);
+        var ipResults = await Task.WhenAll(ipTasks);
 
         var vms = new List<VmDisplayItem>();
         for (int i = 0; i < spiceVms.Count; i++)
@@ -314,6 +322,31 @@ public partial class MainWindow : Window
                                 sn.GetString() != "current");
             }
 
+            string ipAddress = "";
+            if (ipResults[i]?.TryGetProperty("data", out var agentData) == true &&
+                agentData.TryGetProperty("result", out var ifaces))
+            {
+                foreach (var iface in ifaces.EnumerateArray())
+                {
+                    var ifName = iface.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    if (ifName == "lo") continue;
+                    if (iface.TryGetProperty("ip-addresses", out var addrs))
+                    {
+                        foreach (var addr in addrs.EnumerateArray())
+                        {
+                            if (addr.TryGetProperty("ip-address-type", out var t) &&
+                                t.GetString() == "ipv4" &&
+                                addr.TryGetProperty("ip-address", out var ip))
+                            {
+                                ipAddress = ip.GetString() ?? "";
+                                break;
+                            }
+                        }
+                    }
+                    if (ipAddress.Length > 0) break;
+                }
+            }
+
             vms.Add(new VmDisplayItem
             {
                 VmId = e.vmid,
@@ -322,6 +355,7 @@ public partial class MainWindow : Window
                 Pool = e.pool,
                 Status = e.status,
                 SnapCount = snapCount,
+                IpAddress = ipAddress,
                 Notes = LookupVmNote(e.vmid) ?? "",
             });
         }
@@ -642,7 +676,7 @@ public partial class MainWindow : Window
         => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager") { UseShellExecute = true });
 
     private void OnReleaseNotesClick(object sender, RoutedEventArgs e)
-        => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v1.0.0-wpf") { UseShellExecute = true });
+        => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager/releases/latest") { UseShellExecute = true });
 
     private void OnCheckPrereqs(object sender, RoutedEventArgs e)
     {

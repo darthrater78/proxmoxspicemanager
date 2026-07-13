@@ -15,6 +15,7 @@ public class VmDisplayItem : INotifyPropertyChanged
     public string Pool { get; set; } = "";
     public int SnapCount { get; set; }
     public string Status { get; set; } = "";
+    public string IpAddress { get; set; } = "";
     private string _notes = "";
     public string Notes
     {
@@ -55,6 +56,14 @@ public class VmDisplayItem : INotifyPropertyChanged
     }
 
     public FontWeight StatusFontWeight => IsRunning ? FontWeights.Bold : FontWeights.Normal;
+
+    public Brush RowForeground => IsRunning
+        ? (Brush)Application.Current.Resources["ThemeText"]
+        : (Brush)Application.Current.Resources["ThemeOverlay0"];
+
+    public Brush NameForeground => IsRunning
+        ? (Brush)Application.Current.Resources["ThemeBlue"]
+        : (Brush)Application.Current.Resources["ThemeOverlay0"];
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)
