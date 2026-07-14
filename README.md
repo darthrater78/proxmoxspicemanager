@@ -25,10 +25,13 @@ A desktop GUI application for managing and launching SPICE console sessions to P
 
 ## Requirements
 
-### Both Platforms
+### Windows (WPF app)
 
-- Python 3.9 or later (with tkinter — included in standard Python installers)
-- Network access to your Proxmox VE host(s) on port 8006
+| Dependency | How to install |
+|---|---|
+| virt-viewer | [spice-space.org/download.html](https://www.spice-space.org/download.html) — install the Windows MSI |
+
+The WPF app is a self-contained single-file exe — no Python, no .NET runtime install needed.
 
 ### Linux
 
@@ -50,29 +53,14 @@ sudo dnf install python3-tkinter python3-keyring virt-viewer
 sudo apt install python3-tk python3-keyring virt-viewer
 ```
 
-### Windows (WPF app — recommended)
-
-| Dependency | How to install |
-|---|---|
-| virt-viewer | [spice-space.org/download.html](https://www.spice-space.org/download.html) — install the Windows MSI |
-
-The WPF app is a self-contained single-file exe — no Python, no .NET runtime install needed.
-
-### Windows (Python — legacy)
-
-| Dependency | How to install |
-|---|---|
-| Python 3.9+ | [python.org](https://www.python.org/downloads/) — check "Add to PATH" during install |
-| virt-viewer | [spice-space.org/download.html](https://www.spice-space.org/download.html) — install the Windows MSI |
-
 ## Getting Started
 
 > [!IMPORTANT]
 > **Step 1 — Configure Proxmox first:** create a user, role, API token, and set up your VMs → [proxmox-setup.md](proxmox-setup.md)
 >
 > **Then install the app for your platform:**
+> - **Windows** — download `Proxmox-SPICE-Manager.exe` from [Releases](../../releases/latest)
 > - **Linux** — run `proxmox-spice-manager.py` (Fedora/Debian walkthrough with screenshots) → [linux-setup.md](linux-setup.md)
-> - **Windows** — download `Proxmox SPICE Manager.exe` from [Releases](../../releases), or run `proxmox-spice-manager-win.py` from source → [build-windows.md](build-windows.md)
 
 ## Configuration
 
@@ -121,15 +109,12 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 windows/                        # Native WPF Windows app (C#/.NET 8)
 proxmox_spice_common.py         # Shared base module (themes, API, dialogs, base class)
 proxmox-spice-manager.py        # Linux edition (keyring, .desktop export, icon picker)
-proxmox-spice-manager-win.py    # Windows Python edition (DPAPI, registry, shortcuts)
-Proxmox SPICE Manager.spec      # PyInstaller config for building the Windows .exe
 README.md                       # This file
 proxmox-setup.md                # Proxmox server config and app setup (all platforms)
 linux-setup.md                  # Linux installation walkthrough with screenshots
-build-windows.md                # Instructions for building a standalone Windows .exe
 ```
 
-The Linux and Windows Python scripts inherit from a shared base class in `proxmox_spice_common.py`. The WPF app in `windows/` is a standalone C#/.NET 8 project with full feature parity.
+The Linux script inherits from a shared base class in `proxmox_spice_common.py`. The WPF app in `windows/` is a standalone C#/.NET 8 project with full feature parity.
 
 ## Version History
 

@@ -9,7 +9,7 @@ Dependencies: python3-tkinter, python3-keyring, remote-viewer (virt-viewer)
 Install on Fedora:  sudo dnf install python3-tkinter python3-keyring virt-viewer
 Install on Debian:  sudo apt install python3-tk python3-keyring virt-viewer
 
-VERSION 2.2.2
+VERSION 2.2.4
 """
 
 import json
