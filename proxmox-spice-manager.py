@@ -12,13 +12,14 @@ Install on Debian:  sudo apt install python3-tk python3-keyring virt-viewer
 VERSION 2.2.4
 """
 
-import shlex
-import shutil
+import copy
 import importlib
 import json
 import os
-import copy
+import shlex
+import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import ssl
