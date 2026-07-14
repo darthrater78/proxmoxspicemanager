@@ -107,14 +107,13 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 
 ```
 windows/                        # Native WPF Windows app (C#/.NET 8)
-proxmox_spice_common.py         # Shared base module (themes, API, dialogs, base class)
-proxmox-spice-manager.py        # Linux edition (keyring, .desktop export, icon picker)
+proxmox-spice-manager.py        # Linux edition (standalone, single file)
 README.md                       # This file
 proxmox-setup.md                # Proxmox server config and app setup (all platforms)
 linux-setup.md                  # Linux installation walkthrough with screenshots
 ```
 
-The Linux script inherits from a shared base class in `proxmox_spice_common.py`. The WPF app in `windows/` is a standalone C#/.NET 8 project with full feature parity.
+The Linux script is a standalone single-file Python app. The WPF app in `windows/` is a standalone C#/.NET 8 project. Both have full feature parity.
 
 ## Version History
 
