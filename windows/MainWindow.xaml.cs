@@ -47,6 +47,7 @@ public partial class MainWindow : Window
         VmGrid.PreviewMouseRightButtonUp += OnColumnHeaderRightClick;
 
         RefreshClusterList();
+        UpdateDebugLogUi();
 
         if (_config.Clusters.Count > 0)
         {
@@ -201,173 +202,244 @@ public partial class MainWindow : Window
 
         var cluster = _config.Clusters[_selectedClusterIdx];
         StatusLabel.Text = $"Loading VMs from {cluster.Name}...";
+        var totalSw = DebugLogger.StartTimer($"RefreshVmsAsync for {cluster.Name}");
 
-        var auth = await GetAuthAsync(cluster);
-        if (auth == null)
+        try
         {
-            _clusterStatus[cluster.Name] = (false, null);
-            RefreshClusterList();
-            return;
-        }
-
-        // Fetch pool memberships and node list in parallel
-        var resourcesTask = ProxmoxApi.RequestAsync(
-            cluster.Host, "/api2/json/cluster/resources?type=vm", auth: auth);
-        var nodesTask = ProxmoxApi.RequestAsync(
-            cluster.Host, "/api2/json/nodes", auth: auth);
-        await Task.WhenAll(resourcesTask, nodesTask);
-
-        var poolMap = new Dictionary<int, string>();
-        var resourcesJson = await resourcesTask;
-        if (resourcesJson?.TryGetProperty("data", out var resData) == true)
-        {
-            foreach (var res in resData.EnumerateArray())
+            var auth = await GetAuthAsync(cluster);
+            if (auth == null)
             {
-                if (res.TryGetProperty("vmid", out var rvmid) &&
-                    res.TryGetProperty("pool", out var rpool) &&
-                    rpool.GetString() is string poolName && poolName.Length > 0)
-                {
-                    poolMap[rvmid.GetInt32()] = poolName;
-                }
+                DebugLogger.Log("[Refresh] Auth failed — aborting refresh");
+                _clusterStatus[cluster.Name] = (false, null);
+                RefreshClusterList();
+                return;
             }
-        }
 
-        var nodesJson = await nodesTask;
-        if (nodesJson == null || !nodesJson.Value.TryGetProperty("data", out var nodesData))
-        {
-            StatusLabel.Text = $"Failed to connect to {cluster.Name}";
-            _clusterStatus[cluster.Name] = (false, null);
-            RefreshClusterList();
-            return;
-        }
+            // Phase 1: Fetch pool memberships and node list in parallel
+            var phaseSw = DebugLogger.StartTimer("Phase 1: cluster/resources + nodes");
+            var resourcesTask = ProxmoxApi.RequestAsync(
+                cluster.Host, "/api2/json/cluster/resources?type=vm", auth: auth);
+            var nodesTask = ProxmoxApi.RequestAsync(
+                cluster.Host, "/api2/json/nodes", auth: auth);
+            await Task.WhenAll(resourcesTask, nodesTask);
+            DebugLogger.StopTimer(phaseSw, "Phase 1: cluster/resources + nodes");
 
-        // Fetch per-node VM lists in parallel
-        var nodeNames = nodesData.EnumerateArray()
-            .Select(n => n.GetProperty("node").GetString() ?? "")
-            .Where(n => n.Length > 0)
-            .ToList();
-
-        var nodeVmTasks = nodeNames.Select(nodeName =>
-            ProxmoxApi.RequestAsync(cluster.Host, $"/api2/json/nodes/{nodeName}/qemu", auth: auth)
-        ).ToList();
-        var nodeVmResults = await Task.WhenAll(nodeVmTasks);
-
-        // Collect all VMs with their node names, then fetch config+snapshot in parallel
-        var vmEntries = new List<(int vmid, string name, string status, string nodeName, string pool)>();
-        for (int i = 0; i < nodeNames.Count; i++)
-        {
-            var vmJson = nodeVmResults[i];
-            if (vmJson == null || !vmJson.Value.TryGetProperty("data", out var vmData))
-                continue;
-
-            foreach (var vm in vmData.EnumerateArray())
+            var poolMap = new Dictionary<int, string>();
+            var resourcesJson = await resourcesTask;
+            if (resourcesJson?.TryGetProperty("data", out var resData) == true)
             {
-                var vmid = vm.GetProperty("vmid").GetInt32();
-                var name = vm.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                var status = vm.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
-                var pool = poolMap.GetValueOrDefault(vmid, "");
-                vmEntries.Add((vmid, name, status, nodeNames[i], pool));
-            }
-        }
-
-        // Fetch config for all VMs in parallel to check for SPICE display
-        var configTasks = vmEntries.Select(e =>
-            ProxmoxApi.RequestAsync(cluster.Host,
-                $"/api2/json/nodes/{e.nodeName}/qemu/{e.vmid}/config", auth: auth)
-        ).ToList();
-        var configResults = await Task.WhenAll(configTasks);
-
-        // Filter to SPICE-enabled VMs, then fetch snapshots in parallel
-        var spiceVms = new List<(int vmid, string name, string status, string nodeName, string pool)>();
-        for (int i = 0; i < vmEntries.Count; i++)
-        {
-            bool hasSpice = false;
-            if (configResults[i]?.TryGetProperty("data", out var cfgData) == true)
-            {
-                foreach (var prop in cfgData.EnumerateObject())
+                foreach (var res in resData.EnumerateArray())
                 {
-                    if (prop.Name.StartsWith("vga") &&
-                        prop.Value.GetString()?.Contains("qxl") == true)
+                    if (res.TryGetProperty("vmid", out var rvmid) &&
+                        res.TryGetProperty("pool", out var rpool) &&
+                        rpool.GetString() is string poolName && poolName.Length > 0)
                     {
-                        hasSpice = true;
-                        break;
+                        poolMap[rvmid.GetInt32()] = poolName;
                     }
                 }
             }
-            if (hasSpice) spiceVms.Add(vmEntries[i]);
-        }
 
-        var snapTasks = spiceVms.Select(e =>
-            ProxmoxApi.RequestAsync(cluster.Host,
-                $"/api2/json/nodes/{e.nodeName}/qemu/{e.vmid}/snapshot", auth: auth)
-        ).ToList();
-        var ipTasks = spiceVms.Select(e =>
-            e.status.Equals("running", StringComparison.OrdinalIgnoreCase)
-                ? ProxmoxApi.RequestAsync(cluster.Host,
-                    $"/api2/json/nodes/{e.nodeName}/qemu/{e.vmid}/agent/network-get-interfaces", auth: auth)
-                : Task.FromResult<JsonElement?>(null)
-        ).ToList();
-        await Task.WhenAll(snapTasks.Concat(ipTasks));
-        var snapResults = await Task.WhenAll(snapTasks);
-        var ipResults = await Task.WhenAll(ipTasks);
-
-        var vms = new List<VmDisplayItem>();
-        for (int i = 0; i < spiceVms.Count; i++)
-        {
-            var e = spiceVms[i];
-            int snapCount = 0;
-            if (snapResults[i]?.TryGetProperty("data", out var snapData) == true)
+            var nodesJson = await nodesTask;
+            if (nodesJson == null || !nodesJson.Value.TryGetProperty("data", out var nodesData))
             {
-                snapCount = snapData.EnumerateArray()
-                    .Count(s => s.TryGetProperty("name", out var sn) &&
-                                sn.GetString() != "current");
+                StatusLabel.Text = $"Failed to connect to {cluster.Name}";
+                _clusterStatus[cluster.Name] = (false, null);
+                RefreshClusterList();
+                return;
             }
 
-            string ipAddress = "";
-            if (ipResults[i]?.TryGetProperty("data", out var agentData) == true &&
-                agentData.TryGetProperty("result", out var ifaces))
+            // Phase 2: Fetch per-node VM lists in parallel
+            var nodeNames = nodesData.EnumerateArray()
+                .Select(n => n.GetProperty("node").GetString() ?? "")
+                .Where(n => n.Length > 0)
+                .ToList();
+
+            phaseSw = DebugLogger.StartTimer($"Phase 2: per-node VM lists ({nodeNames.Count} nodes)");
+            var nodeVmTasks = nodeNames.Select(nodeName =>
+                ProxmoxApi.RequestAsync(cluster.Host, $"/api2/json/nodes/{nodeName}/qemu", auth: auth)
+            ).ToList();
+            var nodeVmResults = await Task.WhenAll(nodeVmTasks);
+            DebugLogger.StopTimer(phaseSw, $"Phase 2: per-node VM lists ({nodeNames.Count} nodes)");
+
+            var vmEntries = new List<(int vmid, string name, string status, string nodeName, string pool)>();
+            for (int i = 0; i < nodeNames.Count; i++)
             {
-                foreach (var iface in ifaces.EnumerateArray())
+                var vmJson = nodeVmResults[i];
+                if (vmJson == null || !vmJson.Value.TryGetProperty("data", out var vmData))
+                    continue;
+
+                foreach (var vm in vmData.EnumerateArray())
                 {
-                    var ifName = iface.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                    if (ifName == "lo") continue;
-                    if (iface.TryGetProperty("ip-addresses", out var addrs))
+                    var vmid = vm.GetProperty("vmid").GetInt32();
+                    var name = vm.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    var status = vm.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
+                    var pool = poolMap.GetValueOrDefault(vmid, "");
+                    vmEntries.Add((vmid, name, status, nodeNames[i], pool));
+                }
+            }
+
+            DebugLogger.Log($"[Refresh] Found {vmEntries.Count} total VMs across {nodeNames.Count} nodes");
+
+            // Phase 3: Fetch config for all VMs in parallel to check for SPICE display
+            phaseSw = DebugLogger.StartTimer($"Phase 3: VM configs ({vmEntries.Count} VMs)");
+            var configTasks = vmEntries.Select(e =>
+                ProxmoxApi.RequestAsync(cluster.Host,
+                    $"/api2/json/nodes/{e.nodeName}/qemu/{e.vmid}/config", auth: auth)
+            ).ToList();
+            var configResults = await Task.WhenAll(configTasks);
+            DebugLogger.StopTimer(phaseSw, $"Phase 3: VM configs ({vmEntries.Count} VMs)");
+
+            var spiceVms = new List<(int vmid, string name, string status, string nodeName, string pool, bool hasAgent)>();
+            for (int i = 0; i < vmEntries.Count; i++)
+            {
+                bool hasSpice = false;
+                bool hasAgent = false;
+                if (configResults[i]?.TryGetProperty("data", out var cfgData) == true)
+                {
+                    foreach (var prop in cfgData.EnumerateObject())
                     {
-                        foreach (var addr in addrs.EnumerateArray())
+                        if (prop.Name.StartsWith("vga") &&
+                            prop.Value.GetString()?.Contains("qxl") == true)
+                            hasSpice = true;
+                        if (prop.Name == "agent" &&
+                            prop.Value.GetString()?.StartsWith("1") == true)
+                            hasAgent = true;
+                    }
+                }
+                if (hasSpice) spiceVms.Add((vmEntries[i].vmid, vmEntries[i].name,
+                    vmEntries[i].status, vmEntries[i].nodeName, vmEntries[i].pool, hasAgent));
+            }
+
+            DebugLogger.Log($"[Refresh] {spiceVms.Count} SPICE-enabled VMs found");
+
+            // Phase 4a: Fetch snapshots (fast, required)
+            phaseSw = DebugLogger.StartTimer($"Phase 4a: snapshots ({spiceVms.Count})");
+            var snapTasks = spiceVms.Select(e =>
+                ProxmoxApi.RequestAsync(cluster.Host,
+                    $"/api2/json/nodes/{e.nodeName}/qemu/{e.vmid}/snapshot", auth: auth)
+            ).ToList();
+            var snapResults = await Task.WhenAll(snapTasks);
+            DebugLogger.StopTimer(phaseSw, $"Phase 4a: snapshots ({spiceVms.Count})");
+
+            // Build VM list and display immediately — IPs come later
+            var vms = new List<VmDisplayItem>();
+            for (int i = 0; i < spiceVms.Count; i++)
+            {
+                var e = spiceVms[i];
+                int snapCount = 0;
+                if (snapResults[i]?.TryGetProperty("data", out var snapData) == true)
+                {
+                    snapCount = snapData.EnumerateArray()
+                        .Count(s => s.TryGetProperty("name", out var sn) &&
+                                    sn.GetString() != "current");
+                }
+
+                vms.Add(new VmDisplayItem
+                {
+                    VmId = e.vmid,
+                    Name = e.name,
+                    Node = e.nodeName,
+                    Pool = e.pool,
+                    Status = e.status,
+                    SnapCount = snapCount,
+                    HasAgent = e.hasAgent,
+                    IpAddress = e.hasAgent ? "" : "no agent",
+                    Notes = LookupVmNote(e.vmid) ?? "",
+                });
+            }
+
+            _vmItems.Clear();
+            foreach (var vm in vms.OrderBy(v => v.VmId))
+                _vmItems.Add(vm);
+
+            _clusterStatus[cluster.Name] = (true, vms.Count);
+            RefreshClusterList();
+            DebugLogger.StopTimer(totalSw, $"RefreshVmsAsync for {cluster.Name} — {vms.Count} SPICE VMs");
+            StatusLabel.Text = $"{vms.Count} SPICE-enabled VM(s) on {cluster.Name}";
+
+            // Phase 4b: Fetch guest-agent IPs in background — only for running VMs with agent enabled
+            var runningVms = _vmItems.Where(v => v.IsRunning && v.HasAgent).ToList();
+            if (runningVms.Count > 0)
+            {
+                DebugLogger.Log($"[Refresh] Fetching IPs for {runningVms.Count} running VMs in background");
+                var agentTimeout = TimeSpan.FromSeconds(3);
+                int errorCount = 0;
+                var ipTasks = runningVms.Select(capturedVm => Task.Run(async () =>
+                {
+                    try
+                    {
+                        var ipJson = await ProxmoxApi.RequestAsync(cluster.Host,
+                            $"/api2/json/nodes/{capturedVm.Node}/qemu/{capturedVm.VmId}/agent/network-get-interfaces",
+                            auth: auth, timeout: agentTimeout);
+
+                        await Dispatcher.InvokeAsync(() =>
                         {
-                            if (addr.TryGetProperty("ip-address-type", out var t) &&
-                                t.GetString() == "ipv4" &&
-                                addr.TryGetProperty("ip-address", out var ip))
+                            if (ipJson == null)
                             {
-                                ipAddress = ip.GetString() ?? "";
-                                break;
+                                capturedVm.IpAddress = "agent error";
+                                Interlocked.Increment(ref errorCount);
                             }
-                        }
+                            else
+                            {
+                                var ip = ParseIpAddress(ipJson);
+                                capturedVm.IpAddress = ip.Length > 0 ? ip : "";
+                            }
+                        });
                     }
-                    if (ipAddress.Length > 0) break;
+                    catch (Exception ex)
+                    {
+                        DebugLogger.Log($"[Refresh] Background IP fetch for VM {capturedVm.VmId} failed: {ex.Message}");
+                        Interlocked.Increment(ref errorCount);
+                        await Dispatcher.InvokeAsync(() =>
+                        {
+                            capturedVm.IpAddress = "agent error";
+                        });
+                    }
+                })).ToList();
+
+                _ = Task.WhenAll(ipTasks).ContinueWith(_ =>
+                {
+                    Dispatcher.InvokeAsync(() =>
+                    {
+                        if (errorCount > 0)
+                            StatusLabel.Text = $"{vms.Count} SPICE VM(s) on {cluster.Name} — {errorCount} agent error(s)";
+                    });
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            DebugLogger.Log($"[Refresh] CRASHED: {ex.GetType().Name}: {ex.Message}");
+            StatusLabel.Text = $"Error loading VMs: {ex.Message}";
+            _clusterStatus[cluster.Name] = (false, null);
+            RefreshClusterList();
+        }
+    }
+
+    private static string ParseIpAddress(JsonElement? ipJson)
+    {
+        if (ipJson?.TryGetProperty("data", out var agentData) != true ||
+            !agentData.TryGetProperty("result", out var ifaces))
+            return "";
+
+        foreach (var iface in ifaces.EnumerateArray())
+        {
+            var ifName = iface.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+            if (ifName == "lo") continue;
+            if (iface.TryGetProperty("ip-addresses", out var addrs))
+            {
+                foreach (var addr in addrs.EnumerateArray())
+                {
+                    if (addr.TryGetProperty("ip-address-type", out var t) &&
+                        t.GetString() == "ipv4" &&
+                        addr.TryGetProperty("ip-address", out var ip))
+                    {
+                        return ip.GetString() ?? "";
+                    }
                 }
             }
-
-            vms.Add(new VmDisplayItem
-            {
-                VmId = e.vmid,
-                Name = e.name,
-                Node = e.nodeName,
-                Pool = e.pool,
-                Status = e.status,
-                SnapCount = snapCount,
-                IpAddress = ipAddress,
-                Notes = LookupVmNote(e.vmid) ?? "",
-            });
         }
-
-        _vmItems.Clear();
-        foreach (var vm in vms.OrderBy(v => v.VmId))
-            _vmItems.Add(vm);
-
-        _clusterStatus[cluster.Name] = (true, vms.Count);
-        RefreshClusterList();
-        StatusLabel.Text = $"{vms.Count} SPICE-enabled VM(s) on {cluster.Name}";
+        return "";
     }
 
     private void OnRefresh(object sender, RoutedEventArgs e) => _ = RefreshVmsAsync();
@@ -670,6 +742,39 @@ public partial class MainWindow : Window
             MessageBox.Show($"Export failed: {ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    // ── Debug Logging ─────────────────────────────────────────────────────
+    private void UpdateDebugLogUi()
+    {
+        bool on = DebugLogger.Enabled;
+        DebugLogToggle.Content = on ? "Debug Log: ON" : "Debug Log: OFF";
+        DebugLogToggle.Foreground = on
+            ? (System.Windows.Media.Brush)FindResource("ThemeGreen")
+            : (System.Windows.Media.Brush)FindResource("ThemeSubtext0");
+        OpenLogBtn.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnToggleDebugLog(object sender, RoutedEventArgs e)
+    {
+        bool newState = !DebugLogger.Enabled;
+        DebugLogger.SetEnabled(newState);
+        _config.DebugLogging = newState;
+        SaveConfig();
+        UpdateDebugLogUi();
+        StatusLabel.Text = newState
+            ? $"Debug logging enabled — {DebugLogger.LogFilePath}"
+            : "Debug logging disabled";
+    }
+
+    private void OnOpenLogFile(object sender, RoutedEventArgs e)
+    {
+        var path = DebugLogger.LogFilePath;
+        if (System.IO.File.Exists(path))
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        else
+            MessageBox.Show("No log file found yet. Trigger a refresh to generate log entries.",
+                "No Log", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     // ── Header buttons ─────────────────────────────────────────────────────

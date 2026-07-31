@@ -24,6 +24,9 @@ public class AppConfig
 
     [JsonPropertyName("vm_notes")]
     public Dictionary<string, string>? VmNotes { get; set; }
+
+    [JsonPropertyName("debug_logging")]
+    public bool DebugLogging { get; set; }
 }
 
 public class ClusterConfig
