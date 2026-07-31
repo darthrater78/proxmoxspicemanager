@@ -22,5 +22,6 @@ public partial class App : Application
         base.OnStartup(e);
         var config = ConfigService.Load();
         ThemeManager.Apply(config.Theme);
+        DebugLogger.SetEnabled(config.DebugLogging);
     }
 }

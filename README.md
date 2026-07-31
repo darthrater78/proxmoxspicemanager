@@ -22,6 +22,7 @@ A desktop GUI application for managing and launching SPICE console sessions to P
 - **Import / Export** — share cluster configurations between machines (with plaintext secret warning on export)
 - **App menu integration** — install as a desktop app (Linux: `.desktop` file; Windows: Start Menu shortcut)
 - **Prerequisite checker** — first-run dialog detects missing dependencies and helps you install them
+- **Debug logging** — optional timestamped log file for diagnosing API connectivity issues (toggle in header bar, logs to `%APPDATA%\proxmox-spice\debug.log`)
 
 ## Requirements
 
@@ -97,7 +98,9 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 
 | Problem | Solution |
 |---|---|
-| No VMs appear after connecting | Verify your API token has `VM.Audit` permission and that VMs use QXL display |
+| No VMs appear after connecting | Verify your API token has `VM.Audit` permission and that VMs use QXL display. Enable Debug Log in the header bar and check `%APPDATA%\proxmox-spice\debug.log` for details |
+| IP column shows "no agent" | The VM does not have `agent: 1` enabled in its Proxmox config — this is expected |
+| IP column shows "agent error" | The QEMU guest agent is enabled but not responding — check that `qemu-guest-agent` is installed and running inside the VM |
 | "Token secret not found" error | Re-edit the cluster and re-enter the token secret |
 | SPICE window opens but is black | Install `spice-vdagent` and a QXL driver inside the guest VM |
 | remote-viewer not found (Windows) | Install virt-viewer from [spice-space.org](https://www.spice-space.org/download.html) and restart the app |
@@ -117,6 +120,7 @@ The Linux script is a standalone single-file Python app. The WPF app in `windows
 
 ## Version History
 
+- **1.2.0-wpf** — Add debug logging toggle, resilient VM refresh (guest-agent failures no longer block or crash the app), IP column shows "no agent"/"agent error" status, log rotation (5 MB cap)
 - **1.1.2-wpf** — Fix selected row text turning blue for stopped VMs (preserve running/stopped color when selected)
 - **1.1.1-wpf** — Fix notes ComboBox theming (dark background for edit field, dropdown, and selected item), adjust column widths for IP column fit
 - **1.1.0-wpf** — Add live VM IP address column (via QEMU guest agent), running/stopped row color differentiation, release notes link uses /releases/latest

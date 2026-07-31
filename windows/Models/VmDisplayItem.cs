@@ -15,7 +15,13 @@ public class VmDisplayItem : INotifyPropertyChanged
     public string Pool { get; set; } = "";
     public int SnapCount { get; set; }
     public string Status { get; set; } = "";
-    public string IpAddress { get; set; } = "";
+    public bool HasAgent { get; set; }
+    private string _ipAddress = "";
+    public string IpAddress
+    {
+        get => _ipAddress;
+        set { _ipAddress = value; OnPropertyChanged(); }
+    }
     private string _notes = "";
     public string Notes
     {
