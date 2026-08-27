@@ -9,12 +9,15 @@ Dependencies: python3-tkinter, python3-keyring, remote-viewer (virt-viewer)
 Install on Fedora:  sudo dnf install python3-tkinter python3-keyring virt-viewer
 Install on Debian:  sudo apt install python3-tk python3-keyring virt-viewer
 
-VERSION 2.2.4
+VERSION 2.3.0
 """
 
 import copy
+import fcntl
 import importlib
 import json
+import logging
+import logging.handlers
 import os
 import shlex
 import shutil
@@ -34,7 +37,69 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.2.4"
+APP_VERSION = "2.3.0"
+
+
+# ─── Debug Logger ────────────────────────────────────────────────────────────
+class DebugLogger:
+    _LOG_DIR = Path.home() / ".config" / "proxmox-spice"
+    _LOG_FILE = _LOG_DIR / "debug.log"
+    _MAX_BYTES = 5 * 1024 * 1024
+    _logger = logging.getLogger("proxmox-spice-debug")
+    _handler = None
+    enabled = False
+
+    @classmethod
+    def set_enabled(cls, on: bool):
+        if on == cls.enabled:
+            return
+        cls.enabled = on
+        if on:
+            cls._LOG_DIR.mkdir(parents=True, exist_ok=True)
+            handler = logging.handlers.RotatingFileHandler(
+                cls._LOG_FILE, maxBytes=cls._MAX_BYTES, backupCount=1,
+                encoding="utf-8",
+            )
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s.%(msecs)03d  %(message)s",
+                                  datefmt="%Y-%m-%d %H:%M:%S")
+            )
+            cls._logger.addHandler(handler)
+            cls._logger.setLevel(logging.DEBUG)
+            cls._handler = handler
+            cls.log("--- Debug logging started ---")
+        else:
+            cls.log("--- Debug logging stopped ---")
+            if cls._handler:
+                cls._logger.removeHandler(cls._handler)
+                cls._handler.close()
+                cls._handler = None
+
+    @classmethod
+    def log(cls, message: str):
+        if cls.enabled:
+            cls._logger.debug(message)
+
+    @classmethod
+    def log_file_path(cls) -> str:
+        return str(cls._LOG_FILE)
+
+
+# ─── Single-Instance Lock ────────────────────────────────────────────────────
+_lock_fd = None
+
+
+def _acquire_instance_lock() -> bool:
+    global _lock_fd
+    lock_path = Path.home() / ".config" / "proxmox-spice" / ".instance.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _lock_fd = open(lock_path, "w", encoding="utf-8")
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except (OSError, IOError):
+        return False
+
 
 # ─── Theme Definitions ────────────────────────────────────────────────────────
 THEMES = {
@@ -804,6 +869,21 @@ class ProxmoxSpiceManagerBase(tk.Tk):
     def _get_app_version(self):
         return APP_VERSION
 
+    def _vm_note_key(self, vmid) -> str:
+        if self.current_cluster:
+            return f"{self.current_cluster.get('name', '')}:{vmid}"
+        return str(vmid)
+
+    def _lookup_vm_note(self, vmid) -> str:
+        vm_notes = self.config_data.get("vm_notes", {})
+        composite = self._vm_note_key(vmid)
+        if composite in vm_notes:
+            return vm_notes[composite]
+        legacy = str(vmid)
+        if legacy in vm_notes:
+            return vm_notes[legacy]
+        return ""
+
     # ── Init ─────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__()
@@ -819,6 +899,9 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self.auth_cache = {}
         self._closing = False
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        if self.config_data.get("debug_logging", False):
+            DebugLogger.set_enabled(True)
 
         saved_theme = self.config_data.get("theme", "Catppuccin Mocha")
         if saved_theme in THEMES:
@@ -866,6 +949,32 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 child.destroy()
         self.quit()
         self.destroy()
+
+    # ── Debug Logging UI ────────────────────────────────────────────────────
+    def _update_debug_log_ui(self):
+        on = DebugLogger.enabled
+        self._debug_toggle_btn.config(
+            text="Debug Log: ON" if on else "Debug Log: OFF",
+            fg=C["green"] if on else C["subtext0"],
+        )
+
+    def _toggle_debug_log(self):
+        new_state = not DebugLogger.enabled
+        DebugLogger.set_enabled(new_state)
+        self.config_data["debug_logging"] = new_state
+        self._save_config()
+        self._update_debug_log_ui()
+
+    def _open_debug_log(self):
+        path = DebugLogger.log_file_path()
+        if os.path.isfile(path):
+            subprocess.Popen(["xdg-open", path])
+        else:
+            messagebox.showinfo(
+                "No Log", "No debug log file exists yet.\n"
+                "Enable debug logging first.",
+                parent=self,
+            )
 
     def _build_ui(self):
         for widget in self.winfo_children():
@@ -925,6 +1034,20 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             command=self._recheck_prereqs,
             hover_bg=C["mantle"], hover_fg=C["text"], **hbtn,
         ).pack(side="right", padx=(0, 4))
+
+        HoverButton(
+            header, text="Open Log",
+            command=self._open_debug_log,
+            hover_bg=C["mantle"], hover_fg=C["text"], **hbtn,
+        ).pack(side="right", padx=(0, 4))
+
+        self._debug_toggle_btn = HoverButton(
+            header, text="Debug Log: OFF",
+            command=self._toggle_debug_log,
+            hover_bg=C["mantle"], hover_fg=C["text"], **hbtn,
+        )
+        self._debug_toggle_btn.pack(side="right", padx=(0, 4))
+        self._update_debug_log_ui()
 
         theme_frame = tk.Frame(header, bg=C["crust"])
         theme_frame.pack(side="right", padx=(0, 8))
@@ -1412,8 +1535,10 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         if not self.current_cluster:
             return
         cluster = self.current_cluster
+        DebugLogger.log(f"[Refresh] Starting refresh for {cluster.get('name', '?')}")
         auth = self._get_auth(cluster)
         if not auth:
+            DebugLogger.log("[Refresh] Auth failed — aborting refresh")
             self.status_label.config(text="Auth failed", fg=C["red"])
             return
         self.status_label.config(text="Loading VMs...", fg=C["yellow"])
@@ -1505,7 +1630,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                     snap_count = vm.get("_snap_count", 0)
                     snap_display = f"📸 {snap_count}" if snap_count > 0 else "—"
                     vmid_str = str(vm.get("vmid", "?"))
-                    note = self.config_data.get("vm_notes", {}).get(vmid_str, "")
+                    note = self._lookup_vm_note(vmid_str)
                     row = (
                         vmid_str, vm.get("name", "unnamed"),
                         vm.get("_ip_address", ""),
@@ -1516,6 +1641,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
 
                 self._refresh_filter_dropdowns()
                 self._apply_filters()
+                DebugLogger.log(f"[Refresh] {len(spice_vms)} SPICE VMs found "
+                               f"(of {len(qemu_vms)} QEMU VMs)")
                 tls_warn = "  ⚠ TLS off" if cluster.get("skip_tls_verify", False) else ""
                 self.status_label.config(
                     text=f"◈  {cluster['name']}  —  {len(spice_vms)} SPICE VMs{tls_warn}",
@@ -1924,10 +2051,12 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             if val and val not in self.config_data.get("note_options", []):
                 self.config_data.setdefault("note_options", []).append(val)
             vm_notes = self.config_data.setdefault("vm_notes", {})
+            key = self._vm_note_key(vmid)
+            vm_notes.pop(str(vmid), None)
             if val:
-                vm_notes[vmid] = val
+                vm_notes[key] = val
             else:
-                vm_notes.pop(vmid, None)
+                vm_notes.pop(key, None)
             self._save_config()
 
             vals = list(self.vm_tree.item(iid, "values"))
@@ -2079,6 +2208,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             return
 
         cluster = self.current_cluster
+        DebugLogger.log(f"[SPICE] Launching VM {vm['vmid']} ({vm['name']}) "
+                        f"on {cluster.get('name', '?')}")
         auth = self._get_auth(cluster)
         if not auth:
             return
@@ -3067,5 +3198,14 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
 
 
 if __name__ == "__main__":
+    if not _acquire_instance_lock():
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showwarning(
+            "Already Running",
+            "Proxmox SPICE Manager is already running.",
+        )
+        root.destroy()
+        sys.exit(1)
     app = ProxmoxSpiceManager()
     app.mainloop()
