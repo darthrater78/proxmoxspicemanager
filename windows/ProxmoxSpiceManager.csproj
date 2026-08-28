@@ -9,7 +9,8 @@
     <ApplicationIcon>..\icon.ico</ApplicationIcon>
     <AssemblyName>Proxmox-SPICE-Manager</AssemblyName>
     <RootNamespace>ProxmoxSpiceManager</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
+    <RepositoryUrl>https://github.com/darthrater78/proxmoxspicemanager</RepositoryUrl>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
