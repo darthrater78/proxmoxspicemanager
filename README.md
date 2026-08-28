@@ -120,13 +120,18 @@ The Linux script is a standalone single-file Python app. The WPF app in `windows
 
 ## Version History
 
+### Windows (WPF)
+
+- **1.2.1** — Improve SPICE launch speed: reuse HTTP connections across API calls (eliminates per-request TLS handshake), cache remote-viewer path after first lookup
+- **1.2.0** — Add debug logging toggle, resilient VM refresh (guest-agent failures no longer block or crash the app), IP column shows "no agent"/"agent error" status, log rotation (5 MB cap)
+- **1.1.2** — Fix selected row text turning blue for stopped VMs (preserve running/stopped color when selected)
+- **1.1.1** — Fix notes ComboBox theming (dark background for edit field, dropdown, and selected item), adjust column widths for IP column fit
+- **1.1.0** — Add live VM IP address column (via QEMU guest agent), running/stopped row color differentiation, release notes link uses /releases/latest
+- **1.0.0** — Native WPF Windows app (C#/.NET 8): full feature parity with Python version, notes editing with dropdown, column filtering, parallel API refresh, single-instance guard
+
+### Linux (Python)
+
 - **2.3.0** — Add debug logging toggle with rotating log file (5 MB cap), fix VM notes collision across clusters (notes now scoped by cluster name), add single-instance guard to prevent duplicate launches
-- **1.2.1-wpf** — Improve SPICE launch speed: reuse HTTP connections across API calls (eliminates per-request TLS handshake), cache remote-viewer path after first lookup
-- **1.2.0-wpf** — Add debug logging toggle, resilient VM refresh (guest-agent failures no longer block or crash the app), IP column shows "no agent"/"agent error" status, log rotation (5 MB cap)
-- **1.1.2-wpf** — Fix selected row text turning blue for stopped VMs (preserve running/stopped color when selected)
-- **1.1.1-wpf** — Fix notes ComboBox theming (dark background for edit field, dropdown, and selected item), adjust column widths for IP column fit
-- **1.1.0-wpf** — Add live VM IP address column (via QEMU guest agent), running/stopped row color differentiation, release notes link uses /releases/latest
-- **1.0.0-wpf** — Native WPF Windows app (C#/.NET 8): full feature parity with Python version, notes editing with dropdown, column filtering, parallel API refresh, single-instance guard
 - **2.2.4** — Fix selected row text turning blue for stopped VMs (preserve running/stopped color when selected)
 - **2.2.3** — Extract shared base module, fix PowerShell injection in shortcut creation
 - **2.2.2** — Add GitHub and Release Notes links in header
