@@ -6,6 +6,8 @@ namespace ProxmoxSpiceManager.Services;
 
 public static class ViewerService
 {
+    private static string? _cachedViewerPath;
+
     private static readonly string[] SearchPaths =
     [
         @"C:\Program Files\VirtViewer v11.0-256\bin",
@@ -16,13 +18,16 @@ public static class ViewerService
 
     public static string? FindRemoteViewer()
     {
+        if (_cachedViewerPath != null && File.Exists(_cachedViewerPath))
+            return _cachedViewerPath;
+
         // Check PATH
         var pathDirs = Environment.GetEnvironmentVariable("PATH")?.Split(';') ?? [];
         foreach (var dir in pathDirs)
         {
             var candidate = Path.Combine(dir.Trim(), "remote-viewer.exe");
             if (File.Exists(candidate))
-                return candidate;
+                return _cachedViewerPath = candidate;
         }
 
         // Check known install locations
@@ -30,7 +35,7 @@ public static class ViewerService
         {
             var candidate = Path.Combine(dir, "remote-viewer.exe");
             if (File.Exists(candidate))
-                return candidate;
+                return _cachedViewerPath = candidate;
         }
 
         // Check registry
@@ -45,7 +50,7 @@ public static class ViewerService
                 {
                     var candidate = Path.Combine(installDir, "bin", "remote-viewer.exe");
                     if (File.Exists(candidate))
-                        return candidate;
+                        return _cachedViewerPath = candidate;
                 }
             }
         }

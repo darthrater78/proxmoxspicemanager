@@ -18,19 +18,11 @@ public class AuthInfo
 
 public class ProxmoxApi
 {
-    private static HttpClient CreateClient(bool skipTls, TimeSpan? timeout = null)
+    private static readonly HttpClient NormalClient = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private static readonly HttpClient SkipTlsClient = new(new HttpClientHandler
     {
-        var t = timeout ?? TimeSpan.FromSeconds(15);
-        if (skipTls)
-        {
-            var handler = new HttpClientHandler
-            {
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            };
-            return new HttpClient(handler) { Timeout = t };
-        }
-        return new HttpClient { Timeout = t };
-    }
+        ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+    }) { Timeout = Timeout.InfiniteTimeSpan };
 
     public static async Task<JsonElement?> RequestAsync(
         string host, string endpoint, string method = "GET",
@@ -41,7 +33,7 @@ public class ProxmoxApi
             return null;
 
         bool skipTls = auth?.SkipTlsVerify ?? false;
-        using var client = CreateClient(skipTls, timeout);
+        var client = skipTls ? SkipTlsClient : NormalClient;
 
         var request = new HttpRequestMessage(new HttpMethod(method), $"{host}{endpoint}");
 
@@ -64,11 +56,12 @@ public class ProxmoxApi
                 : new StringContent("", Encoding.UTF8, "application/x-www-form-urlencoded");
         }
 
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(15));
         var sw = Stopwatch.StartNew();
         try
         {
             DebugLogger.Log($"[API] {method} {endpoint}");
-            var response = await client.SendAsync(request);
+            var response = await client.SendAsync(request, cts.Token);
             var body = await response.Content.ReadAsStringAsync();
             sw.Stop();
             var statusCode = (int)response.StatusCode;
@@ -92,7 +85,7 @@ public class ProxmoxApi
     public static async Task<AuthInfo?> AuthenticatePasswordAsync(
         string host, string username, string password, bool skipTls = false)
     {
-        using var client = CreateClient(skipTls);
+        var client = skipTls ? SkipTlsClient : NormalClient;
 
         var content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -100,11 +93,12 @@ public class ProxmoxApi
             ["password"] = password,
         });
 
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var sw = Stopwatch.StartNew();
         try
         {
             DebugLogger.Log($"[API] POST /api2/json/access/ticket (password auth for {username})");
-            var response = await client.PostAsync($"{host}/api2/json/access/ticket", content);
+            var response = await client.PostAsync($"{host}/api2/json/access/ticket", content, cts.Token);
             var body = await response.Content.ReadAsStringAsync();
             sw.Stop();
             DebugLogger.Log($"[API] Password auth -> {(int)response.StatusCode} ({sw.ElapsedMilliseconds}ms)");

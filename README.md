@@ -121,6 +121,7 @@ The Linux script is a standalone single-file Python app. The WPF app in `windows
 ## Version History
 
 - **2.3.0** — Add debug logging toggle with rotating log file (5 MB cap), fix VM notes collision across clusters (notes now scoped by cluster name), add single-instance guard to prevent duplicate launches
+- **1.2.1-wpf** — Improve SPICE launch speed: reuse HTTP connections across API calls (eliminates per-request TLS handshake), cache remote-viewer path after first lookup
 - **1.2.0-wpf** — Add debug logging toggle, resilient VM refresh (guest-agent failures no longer block or crash the app), IP column shows "no agent"/"agent error" status, log rotation (5 MB cap)
 - **1.1.2-wpf** — Fix selected row text turning blue for stopped VMs (preserve running/stopped color when selected)
 - **1.1.1-wpf** — Fix notes ComboBox theming (dark background for edit field, dropdown, and selected item), adjust column widths for IP column fit
