@@ -1,0 +1,3 @@
+# Tools for scripts/check.sh (not needed to run the app). Dependabot keeps this current.
+ruff==0.16.9
+shellcheck-py==0.11.0.1

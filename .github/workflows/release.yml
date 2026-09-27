@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false   # never cancel a release in flight
+
+jobs:
+  # Merged is not the same as tested. This job checks both before anything is
+  # built or published, with read-only permissions. It runs on Linux because
+  # it needs only git and gh.
+  gate:
+    runs-on: ubuntu-latest
+    # The CI wait loop below gives up after 30 minutes; this is the backstop.
+    timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag is on default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF_NAME" in
+            *-dev.*|*-alpha.*|*-beta.*|*-rc.*)
+              echo "Pre-release tag, so any branch is allowed."
+              exit 0 ;;
+          esac
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "::error::Tag $GITHUB_REF_NAME is not on $DEFAULT_BRANCH. Releases come from the default branch only."
+            echo "Use a pre-release tag (for example v3.1.0-dev.1) to build from a branch." >&2
+            exit 1
+          fi
+
+      - name: Require a passing CI run for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 1800 ))
+          while true; do
+            runs=$(gh api \
+              "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=100" \
+              --jq '.workflow_runs[] | "\(.status) \(.conclusion) \(.html_url)"')
+
+            if [ -z "$runs" ]; then
+              echo "::error::CI has never run for ${SHA}, so nothing has tested this commit."
+              echo "Push the branch so CI runs on it, or dispatch it by hand" >&2
+              echo "(Actions -> CI -> Run workflow), then re-tag." >&2
+              exit 1
+            fi
+
+            if printf '%s\n' "$runs" | awk '$2 == "success" { hit = 1 } END { exit !hit }'; then
+              echo "CI passed for ${SHA}."
+              exit 0
+            fi
+
+            unfinished=$(printf '%s\n' "$runs" | awk '$1 != "completed"' | wc -l)
+            if [ "$unfinished" -eq 0 ]; then
+              echo "::error::CI ran for ${SHA} and did not pass. Refusing to release."
+              printf '%s\n' "$runs" | sed 's/^/  /' >&2
+              exit 1
+            fi
+
+            echo "CI is still running for ${SHA} (${unfinished} unfinished), waiting."
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for CI on ${SHA} to finish."
+              exit 1
+            fi
+            sleep 20
+          done
+
+  release:
+    needs: gate
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write       # create the release
+      id-token: write       # sign the provenance attestation
+      attestations: write   # store the provenance attestation
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Lint and the changelog check are not repeated here: the gate job
+      # required ci.yml to have passed on this exact commit.
+      - name: Verify tag matches the version in the tagged commit
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(bash scripts/version.sh)"
+          # A pre-release tag (v3.1.0-dev.1) must still name the declared version.
+          if [ "v${version}" != "${TAG%%-*}" ]; then
+            echo "::error::Tag $TAG is on a commit that declares ${version}. Merge the release first, then tag the merged commit."
+            exit 1
+          fi
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        run: bash scripts/build.sh
+
+      - name: Stage release files
+        run: |
+          set -euo pipefail
+          mkdir release
+          cp dist/Proxmox-SPICE-Manager.exe proxmox-spice-manager.py release/
+          cd release
+          sha256sum Proxmox-SPICE-Manager.exe proxmox-spice-manager.py > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release/Proxmox-SPICE-Manager.exe
+            release/proxmox-spice-manager.py
+
+      - name: Extract release notes
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          version="${version%%-*}"
+          # Everything under "## [X.Y.Z]" up to the next level-2 heading.
+          awk -v h="## [${version}]" '
+            index($0, h) == 1 { flag = 1; next }
+            flag && /^## / { exit }
+            flag { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "Release ${GITHUB_REF_NAME}" > release-notes.md
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          prerelease=()
+          case "$GITHUB_REF_NAME" in
+            *-dev.*|*-alpha.*|*-beta.*|*-rc.*) prerelease=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            release/Proxmox-SPICE-Manager.exe \
+            release/proxmox-spice-manager.py \
+            release/SHA256SUMS \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            "${prerelease[@]}"
+
+      - name: Verify release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | sort | tr '\n' ' ')"
+          echo "Assets: $assets"
+          expected="Proxmox-SPICE-Manager.exe SHA256SUMS proxmox-spice-manager.py "
+          if [ "$assets" != "$expected" ]; then
+            echo "::error::Release assets are '$assets', expected '$expected'."
+            exit 1
+          fi

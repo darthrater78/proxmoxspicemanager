@@ -62,6 +62,14 @@ public partial class ClusterDialog : Window
             return;
         }
 
+        if (!Uri.TryCreate(host, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps || string.IsNullOrEmpty(uri.Host))
+        {
+            MessageBox.Show("The host URL must start with https://, for example\nhttps://pve.example.com:8006",
+                "Invalid Host URL", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         var authMethod = TokenRadio.IsChecked == true ? "token" : "password";
         var secret = TokenSecretBox.Password;
 

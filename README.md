@@ -8,6 +8,10 @@ A desktop GUI application for managing and launching SPICE console sessions to P
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+**Current version: 3.0.0** · [GitHub](https://github.com/darthrater78/proxmoxspicemanager) · [Release notes](https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v3.0.0) · [Changelog](CHANGELOG.md)
+
+Both platforms share one version number, and each release carries both the Windows exe and the Linux script.
+
 ## Features
 
 - **Multi-cluster management** — connect to multiple Proxmox clusters with saved credentials
@@ -61,7 +65,17 @@ sudo apt install python3-tk python3-keyring virt-viewer
 >
 > **Then install the app for your platform:**
 > - **Windows** — download `Proxmox-SPICE-Manager.exe` from [Releases](../../releases/latest)
-> - **Linux** — run `proxmox-spice-manager.py` (Fedora/Debian walkthrough with screenshots) → [linux-setup.md](linux-setup.md)
+> - **Linux** — download `proxmox-spice-manager.py` from [Releases](../../releases/latest) and run it (Fedora/Debian walkthrough with screenshots) → [linux-setup.md](linux-setup.md)
+
+### Verifying a download
+
+Release files are built by GitHub Actions from the tagged commit. Each release has a `SHA256SUMS` file, and both files carry a build provenance attestation that you can check with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify Proxmox-SPICE-Manager.exe -R darthrater78/proxmoxspicemanager
+gh attestation verify proxmox-spice-manager.py -R darthrater78/proxmoxspicemanager
+```
 
 ## Configuration
 
@@ -79,20 +93,21 @@ The config file stores cluster definitions, theme preference, column order, and 
 Use the sidebar Import/Export buttons to transfer cluster configurations between machines:
 
 - **Export** decrypts secrets and writes them as plaintext JSON — treat the exported file as sensitive
-- **Import** re-encrypts secrets with the local machine's credentials and handles name collisions by appending "(Imported)"
+- **Import** handles name collisions by appending "(Imported)". On Linux it moves secrets into the keyring. On Windows, imported secrets are not yet re-encrypted and must be re-entered by editing the cluster (known issue).
+- Export files are not yet interchangeable between the Windows and Linux apps (known issue).
 
 ## Security Notes
 
 - **Linux:** Token secrets are stored in your desktop environment's keyring (GNOME Keyring, KDE Wallet, etc.) via the `keyring` Python package. They are never written to the JSON config file.
 - **Windows:** Token secrets are encrypted using Windows DPAPI (`CryptProtectData`), which ties the encryption key to your Windows user account. The encrypted blobs are stored as base64 in `connections.json`. They cannot be decrypted by another user or on another machine.
-- **SSL:** TLS certificate verification can be skipped per-cluster via the "Skip TLS verification" option (for self-signed certs, common in Proxmox). All communication still uses HTTPS.
+- **SSL:** TLS certificate verification can be skipped per-cluster via the "Skip TLS verification" option (for self-signed certs, common in Proxmox). This accepts any certificate, so only use it on a network you trust. Host URLs must use `https://`; the apps refuse to save or log in to a plain `http://` URL.
 - **Export files** contain plaintext secrets — handle them accordingly.
 
 ## Tips
 
 - **Clipboard sharing** requires `spice-vdagent` running inside the guest VM with a graphical session (not a raw TTY). For CLI-only VMs, use SSH for copy/paste.
 - **ACPI Shutdown** sends a graceful shutdown signal — the guest OS must handle ACPI events. **Force Stop** kills the QEMU process immediately (unsaved data will be lost).
-- **Polling** — after power or snapshot actions, the app polls every 10 seconds (up to 2 minutes) for state changes, then refreshes the VM list.
+- **Polling** — after power or snapshot actions, the Linux app polls every 10 seconds (up to 2 minutes) for state changes, then refreshes the VM list. The Windows app waits a few seconds and refreshes once.
 
 ## Troubleshooting
 
@@ -111,35 +126,26 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 ```
 windows/                        # Native WPF Windows app (C#/.NET 8)
 proxmox-spice-manager.py        # Linux edition (standalone, single file)
+scripts/                        # check.sh, build.sh, version.sh (used by CI and locally)
+.github/                        # CI, release and workflow-lint workflows; Dependabot config
+CHANGELOG.md                    # Release history
 README.md                       # This file
 proxmox-setup.md                # Proxmox server config and app setup (all platforms)
 linux-setup.md                  # Linux installation walkthrough with screenshots
 ```
 
-The Linux script is a standalone single-file Python app. The WPF app in `windows/` is a standalone C#/.NET 8 project. Both have full feature parity.
+The Linux script is a standalone single-file Python app. The WPF app in `windows/` is a standalone C#/.NET 8 project. Features are kept in parity where the platforms allow; the known gaps are noted above.
+
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+bash scripts/check.sh    # version agreement, changelog entry, Python lint, shellcheck
+bash scripts/build.sh    # Windows exe into dist/ (needs the .NET 8 SDK; works on Linux too)
+```
+
+The version is declared in `windows/ProxmoxSpiceManager.csproj` and in `APP_VERSION` plus the docstring of `proxmox-spice-manager.py`; `scripts/version.sh` fails if they disagree. To release, merge a version bump with its `CHANGELOG.md` entry, then push a `vX.Y.Z` tag on `main`. A `vX.Y.Z-dev.N` tag on a branch builds a pre-release.
 
 ## Version History
 
-### Windows (WPF)
-
-- **1.2.1** — Improve SPICE launch speed: reuse HTTP connections across API calls (eliminates per-request TLS handshake), cache remote-viewer path after first lookup
-- **1.2.0** — Add debug logging toggle, resilient VM refresh (guest-agent failures no longer block or crash the app), IP column shows "no agent"/"agent error" status, log rotation (5 MB cap)
-- **1.1.2** — Fix selected row text turning blue for stopped VMs (preserve running/stopped color when selected)
-- **1.1.1** — Fix notes ComboBox theming (dark background for edit field, dropdown, and selected item), adjust column widths for IP column fit
-- **1.1.0** — Add live VM IP address column (via QEMU guest agent), running/stopped row color differentiation, release notes link uses /releases/latest
-- **1.0.0** — Native WPF Windows app (C#/.NET 8): full feature parity with Python version, notes editing with dropdown, column filtering, parallel API refresh, single-instance guard
-
-### Linux (Python)
-
-- **2.3.0** — Add debug logging toggle with rotating log file (5 MB cap), fix VM notes collision across clusters (notes now scoped by cluster name), add single-instance guard to prevent duplicate launches
-- **2.2.4** — Fix selected row text turning blue for stopped VMs (preserve running/stopped color when selected)
-- **2.2.3** — Extract shared base module, fix PowerShell injection in shortcut creation
-- **2.2.2** — Add GitHub and Release Notes links in header
-- **2.2.1** — Filter UI redesign, power action UX, security hardening
-- **2.2.0** — Bulk select, reboot, notes column, security hardening
-- **2.1.4** — App icon update
-- **2.1.3** — App icon — SPICE text with S monogram for small sizes
-- **2.1.1** — Bug fixes: secret migration safety, API error normalization, sort persistence, auth passed to polling methods
-- **2.1.0** — Rewrote to pure `urllib` (removed curl/jq deps), added column filters, snapshot indicators, pool column, import/export
-- **2.0.0** — Full GUI rewrite with multi-cluster support, themes, snapshot management, keyring integration
-- **1.0.0** — Initial shell script wrapper for `remote-viewer`
+See [CHANGELOG.md](CHANGELOG.md).

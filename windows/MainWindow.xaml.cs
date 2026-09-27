@@ -28,9 +28,15 @@ public partial class MainWindow : Window
     // Exposed for XAML binding
     public List<string> NoteOptionsList => _config.NoteOptions ?? [];
 
+    // Single source of truth for the version is <Version> in the csproj.
+    private static readonly string AppVersion =
+        typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
     public MainWindow()
     {
         InitializeComponent();
+        Title = $"Proxmox SPICE Manager v{AppVersion}";
+        TitleText.Text = Title;
         _config = ConfigService.Load();
         _config.NoteOptions ??= [];
         _config.VmNotes ??= new Dictionary<string, string>();
@@ -549,8 +555,7 @@ public partial class MainWindow : Window
             }
             vvContent += "delete-this-file=1\n";
 
-            var vvPath = Path.Combine(Path.GetTempPath(), $"pve-spice-{vm.VmId}.vv");
-            await File.WriteAllTextAsync(vvPath, vvContent);
+            var vvPath = ViewerService.WriteVvFile(vvContent);
 
             ViewerService.LaunchSpice(viewer, vvPath);
             StatusLabel.Text = $"Launched SPICE session for {vm.Name}";
@@ -782,7 +787,7 @@ public partial class MainWindow : Window
         => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager") { UseShellExecute = true });
 
     private void OnReleaseNotesClick(object sender, RoutedEventArgs e)
-        => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager/releases/latest") { UseShellExecute = true });
+        => Process.Start(new ProcessStartInfo($"https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v{AppVersion}") { UseShellExecute = true });
 
     private void OnCheckPrereqs(object sender, RoutedEventArgs e)
     {
@@ -1204,7 +1209,8 @@ $s.Save()";
             var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(psScript));
             Process.Start(new ProcessStartInfo
             {
-                FileName = "powershell",
+                FileName = Path.Combine(Environment.SystemDirectory,
+                    "WindowsPowerShell", "v1.0", "powershell.exe"),
                 Arguments = $"-EncodedCommand {encoded}",
                 CreateNoWindow = true,
                 UseShellExecute = false,

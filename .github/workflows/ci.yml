@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']   # not a bare `push:`, which would also fire on tag pushes
+  pull_request:
+  # Lets a commit that CI skipped be checked by hand before it is tagged.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Version, changelog and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.x'
+
+      - name: Install check tools
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run project checks
+        run: bash scripts/check.sh
+
+  build:
+    name: Build Windows exe
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        shell: bash
+        run: bash scripts/build.sh
+
+      # The test artifact for this exact commit: download it from the run page
+      # to try a branch or PR before it merges.
+      - name: Upload test build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Proxmox-SPICE-Manager-${{ github.sha }}
+          path: dist/Proxmox-SPICE-Manager.exe
+          if-no-files-found: error
+          retention-days: 14

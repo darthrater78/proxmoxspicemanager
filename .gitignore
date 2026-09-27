@@ -10,3 +10,7 @@ dist/
 # .NET build artifacts
 windows/bin/
 windows/obj/
+
+# dev-skills session files (local only)
+.dev-skills-gates.md
+.dev-skills-handoff.md

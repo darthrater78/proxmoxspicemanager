@@ -9,7 +9,7 @@ Dependencies: python3-tkinter, python3-keyring, remote-viewer (virt-viewer)
 Install on Fedora:  sudo dnf install python3-tkinter python3-keyring virt-viewer
 Install on Debian:  sudo apt install python3-tk python3-keyring virt-viewer
 
-VERSION 2.3.0
+VERSION 3.0.0
 """
 
 import copy
@@ -37,7 +37,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 APP_ID = "proxmox-spice-manager"
-APP_VERSION = "2.3.0"
+APP_VERSION = "3.0.0"
 
 
 # ─── Debug Logger ────────────────────────────────────────────────────────────
@@ -210,6 +210,10 @@ def api_request(host, endpoint, method="GET", auth=None, data=None):
 
 
 def authenticate_password(host, username, password, skip_tls_verify=False):
+    # Never send a password over plain HTTP (an imported or hand-edited config
+    # can bypass the check in ClusterDialog).
+    if not host.lower().startswith("https://"):
+        return None
     url = f"{host}/api2/json/access/ticket"
     data = urllib.parse.urlencode(
         {"username": username, "password": password}
@@ -413,6 +417,15 @@ class ClusterDialog(tk.Toplevel):
         if not name or not host:
             messagebox.showwarning(
                 "Missing Fields", "Name and Host URL are required.",
+                parent=self,
+            )
+            return
+        parsed = urllib.parse.urlparse(host)
+        if parsed.scheme.lower() != "https" or not parsed.hostname:
+            messagebox.showwarning(
+                "Invalid Host URL",
+                "The host URL must start with https://, for example\n"
+                "https://pve.example.com:8006",
                 parent=self,
             )
             return
@@ -2274,8 +2287,11 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                         os.unlink(vv_path)
                     except OSError:
                         pass
+                # Bind now: Python unbinds `e` when the except block ends,
+                # before the deferred callback runs.
+                err = str(e)
                 self.after(0, lambda: messagebox.showerror(
-                    "Launch Error", str(e), parent=self
+                    "Launch Error", err, parent=self
                 ))
 
         threading.Thread(target=connect, daemon=True).start()
@@ -2295,7 +2311,6 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             valid = [v for v in vms if v["status"] != "running"]
         else:
             valid = [v for v in vms if v["status"] == "running"]
-        skipped = [v for v in vms if v not in valid]
 
         if not valid:
             messagebox.showinfo("No Action", "All selected VMs are already in the target state.", parent=self)
@@ -2670,7 +2685,6 @@ class IconPickerDialog(tk.Toplevel):
     ]
 
     def __init__(self, parent):
-        from tkinter import filedialog
         super().__init__(parent)
         self.result = None
         self.title("Choose App Icon")

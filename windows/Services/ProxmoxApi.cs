@@ -85,6 +85,11 @@ public class ProxmoxApi
     public static async Task<AuthInfo?> AuthenticatePasswordAsync(
         string host, string username, string password, bool skipTls = false)
     {
+        // Never send a password over plain HTTP (an imported config can bypass
+        // the check in ClusterDialog).
+        if (!host.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return null;
+
         var client = skipTls ? SkipTlsClient : NormalClient;
 
         var content = new FormUrlEncodedContent(new Dictionary<string, string>
