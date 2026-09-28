@@ -17,7 +17,7 @@ Both platforms share one version number, and each release carries both the Windo
 - **Multi-cluster management** — connect to multiple Proxmox clusters with saved credentials
 - **Auto-discovery** — automatically detects SPICE-enabled VMs across all cluster nodes
 - **Live IP address** — shows each running VM's IP via QEMU guest agent (requires `VM.GuestAgent.Audit` permission)
-- **One-click SPICE launch** — opens `remote-viewer` sessions from a VM's Connect button (Windows), a double-click, or Enter
+- **One-click SPICE launch** — opens `remote-viewer` sessions from a VM's Connect button, a double-click, or Enter
 - **VMs grouped by node, or one flat list** — each node shows how many of its VMs are running; sort by any column, search by name, ID, IP, pool, notes or OS, and filter to running or stopped VMs
 - **VM power controls** — Start, ACPI Shutdown, Reboot and Force Stop; Ctrl-click or Shift-click to act on several VMs at once
 - **Keyboard shortcuts** — Enter opens the console, S starts, Shift+S shuts down, R reboots, P opens snapshots, Ctrl+. force stops, / searches, F5 refreshes
@@ -25,7 +25,7 @@ Both platforms share one version number, and each release carries both the Windo
 - **Secure credential storage** — Linux: OS keyring (GNOME Keyring, KDE Wallet, etc.); Windows: DPAPI encryption tied to your Windows user account
 - **5 built-in themes and 7 accent colours** — Catppuccin Mocha, Catppuccin Latte, Nord, Dracula, OLED Dark; orange accent by default, switchable from the Appearance button next to Settings
 - **Import / Export** — share cluster configurations between machines (with plaintext secret warning on export)
-- **App menu integration** — install as a desktop app (Linux: `.desktop` file; Windows: Start Menu shortcut)
+- **App menu integration** — install as a desktop app (Linux: `.desktop` file; Windows: Start Menu shortcut). On Linux, Settings → **Export .desktop for selected VM** also adds a menu entry that opens that one VM's console directly (`proxmox-spice-manager.py --connect "<cluster>" <vmid>`), offering to start the VM first
 - **Prerequisite checker** — first-run dialog detects missing dependencies and helps you install them
 - **Debug logging** — optional timestamped log file for diagnosing API connectivity issues (toggle in the Settings menu; Linux: `~/.config/proxmox-spice/debug.log`, Windows: `%APPDATA%\proxmox-spice\debug.log`)
 

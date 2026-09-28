@@ -81,6 +81,13 @@ to the other where the platforms allow it.
   hour without asking (Proxmox accepts the current ticket in place of the
   password), and the password is asked again only if renewal fails. API
   token logins have no ticket and are unchanged.
+- Linux: "Export .desktop for selected VM" made a launcher that opened the
+  manager, not the VM, and assumed the script was `~/proxmox-spice-manager.py`.
+  The launcher now runs `proxmox-spice-manager.py --connect "<cluster>" <vmid>`
+  from where the script really is: it logs in as the manager does (keyring
+  token or password prompt, pinned certificate), offers to start a stopped VM,
+  opens the console and exits, and works while the manager is open. Its file
+  name includes the cluster, so the same VM ID on two clusters no longer clashes.
 - Linux: when the system keyring couldn't store a token secret (no keyring
   running, or a locked wallet), the cluster looked saved but couldn't log in
   later. The app now says which cluster's secret wasn't saved and why.

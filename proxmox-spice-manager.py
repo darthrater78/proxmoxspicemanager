@@ -22,6 +22,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -328,6 +329,29 @@ def authenticate_password(host, username, password, pin=None):
     if data.get("ticket"):
         return {"ticket": data["ticket"], "csrf": data.get("CSRFPreventionToken", "")}
     return None
+
+
+def write_vv_file(spice_data):
+    """A remote-viewer connection file from Proxmox's spiceproxy answer; returns its path.
+    Created private (0600); remote-viewer deletes it once read (delete-this-file)."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", prefix="proxmox-spice-", suffix=".vv", delete=False, encoding="utf-8",
+    ) as f:
+        try:
+            f.write("[virt-viewer]\n")
+            for key in ("type", "host", "port", "tls-port", "password",
+                        "proxy", "host-subject", "ca"):
+                f.write(f"{key}={spice_data.get(key, '')}\n")
+            f.write(
+                "toggle-fullscreen=shift+f11\n"
+                "release-cursor=shift+f12\n"
+                "secure-attention=ctrl+alt+end\n"
+                "delete-this-file=1\n"
+            )
+        except OSError:
+            os.unlink(f.name)
+            raise
+    return f.name
 
 
 # ─── Config Persistence ──────────────────────────────────────────────────────
@@ -3155,22 +3179,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
 
             vv_path = None
             try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w", prefix="proxmox-spice-", suffix=".vv",
-                    delete=False, encoding="utf-8",
-                ) as f:
-                    vv_path = f.name
-                    f.write("[virt-viewer]\n")
-                    for key in ("type", "host", "port", "tls-port", "password",
-                                "proxy", "host-subject", "ca"):
-                        f.write(f"{key}={spice_data.get(key, '')}\n")
-                    f.write(
-                        "toggle-fullscreen=shift+f11\n"
-                        "release-cursor=shift+f12\n"
-                        "secure-attention=ctrl+alt+end\n"
-                        "delete-this-file=1\n"
-                    )
-
+                vv_path = write_vv_file(spice_data)
                 self._platform_set_vv_permissions(vv_path)
                 self._platform_launch_viewer(viewer, vv_path)
 
@@ -3995,21 +4004,25 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
         ]
 
     def _export_desktop(self):
+        """A menu launcher that opens the selected VM's console (--connect), not the manager."""
         vm = self._get_selected_vm()
         if not vm:
             return
-
+        cluster = self.current_cluster["name"]
         desktop_dir = Path.home() / ".local" / "share" / "applications"
         desktop_dir.mkdir(parents=True, exist_ok=True)
-        filepath = desktop_dir / f"spice-vm{vm['vmid']}.desktop"
-        script_path = Path.home() / "proxmox-spice-manager.py"
-
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", cluster).strip("-").lower() or "cluster"
+        filepath = desktop_dir / f"spice-{slug}-vm{vm['vmid']}.desktop"
+        command = [*launcher_command(), "--connect", cluster, str(vm["vmid"])]
+        name = desktop_value(f"{vm['name']} (VM {vm['vmid']})")
+        comment = desktop_value(f"SPICE console on {cluster}")
         content = (
             "[Desktop Entry]\n"
-            f"Name={vm['name']} (VM {vm['vmid']})\n"
-            f"Exec=/usr/bin/python3 \"{script_path}\"\n"
-            "Icon=computer\n"
             "Type=Application\n"
+            f"Name={name}\n"
+            f"Comment={comment}\n"
+            f"Exec={' '.join(desktop_exec_arg(arg) for arg in command)}\n"
+            "Icon=computer\n"
             "Terminal=false\n"
             "Categories=System;\n"
         )
@@ -4017,7 +4030,9 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
             f.write(content)
         os.chmod(filepath, 0o755)
         messagebox.showinfo(
-            "Exported", f"Desktop launcher saved:\n{filepath}", parent=self
+            "Exported", f"Desktop launcher saved:\n{filepath}\n\n"
+            "It opens this VM's console directly, starting the VM first if you agree.",
+            parent=self,
         )
 
     def _install_to_app_menu(self):
@@ -4089,7 +4104,127 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
         )
 
 
+# ─── Launchers: --connect ────────────────────────────────────────────────────
+def launcher_command():
+    """How to run this app again: the frozen binary, or this interpreter and this script."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    return [sys.executable, str(Path(__file__).resolve())]
+
+
+def desktop_value(text):
+    """A .desktop string value: one line, backslashes escaped."""
+    return " ".join(text.split()).replace("\\", "\\\\")
+
+
+def desktop_exec_arg(arg):
+    """One Exec argument, quoted by the Desktop Entry rules: \\ " ` $ escaped inside the
+    quotes, then the general string escape for backslashes, and % doubled."""
+    inner = re.sub(r'([\\"`$])', r"\\\1", arg)
+    return f'"{inner}"'.replace("\\", "\\\\").replace("%", "%%")
+
+
+class _LaunchStop(Exception):
+    """Ends --connect: args[0] is the message to show, or None when the user cancelled."""
+
+
+_UNTRUSTED_FOR_LAUNCHER = (
+    "The server's certificate isn't the one confirmed in Proxmox SPICE Manager. "
+    "Open the manager and refresh the cluster to check it.")
+
+
+def _launcher_auth(root, cluster):
+    """Log in as the manager does: the keyring token, or a password prompt."""
+    name, host, pin = cluster["name"], cluster["host"], cluster.get("tls_fingerprint")
+    if cluster.get("auth_method") == "token":
+        secret = get_secret(name)
+        if not secret:
+            raise _LaunchStop(f"The token secret for {name} isn't in the keyring. "
+                              "Edit the cluster in the manager and enter it again.")
+        return {"token_id": cluster.get("token_id"), "token_secret": secret, "tls_fingerprint": pin}
+    user = cluster.get("username", "root@pam")
+    prompt = PasswordPrompt(root, user, host)
+    if not prompt.result:
+        raise _LaunchStop(None)
+    try:
+        auth = authenticate_password(host, user, prompt.result, pin=pin)
+    except TlsUntrusted:
+        raise _LaunchStop(_UNTRUSTED_FOR_LAUNCHER) from None
+    if not auth:
+        raise _LaunchStop("Could not authenticate.")
+    auth["tls_fingerprint"] = pin
+    return auth
+
+
+def _launcher_start(root, call, name, base):
+    """Offer to start a stopped VM, then wait up to a minute for it to run."""
+    if not messagebox.askyesno("Start VM?", f"{name} isn't running. Start it and open its console?",
+                               parent=root):
+        raise _LaunchStop(None)
+    started = call(f"{base}/status/start", "POST")
+    if "error" in started:
+        raise _LaunchStop(f"Couldn't start {name}: {started['error']}")
+    for _ in range(30):
+        if call(f"{base}/status/current").get("data", {}).get("status") == "running":
+            return
+        time.sleep(2)
+    raise _LaunchStop(f"{name} didn't start within a minute.")
+
+
+def _launcher_open(root, config, cluster_name, vmid):
+    cluster = next((c for c in config.get("clusters", []) if c.get("name") == cluster_name), None)
+    if cluster is None:
+        raise _LaunchStop(f"There is no cluster named \"{cluster_name}\" any more. It may have been "
+                          "renamed or removed in the manager; export the launcher again.")
+    auth = _launcher_auth(root, cluster)
+
+    def call(endpoint, method="GET"):
+        return api_request(cluster["host"], endpoint, method=method, auth=auth)
+
+    data = call("/api2/json/cluster/resources?type=vm")
+    if "tls_untrusted" in data:
+        raise _LaunchStop(_UNTRUSTED_FOR_LAUNCHER)
+    if "error" in data:
+        raise _LaunchStop(f"Couldn't reach {cluster_name}: {data['error']}")
+    vm = next((v for v in data.get("data", []) if v.get("type") == "qemu" and v.get("vmid") == vmid), None)
+    if vm is None:
+        raise _LaunchStop(f"VM {vmid} isn't on {cluster_name} any more.")
+    name, base = vm.get("name", str(vmid)), f"/api2/json/nodes/{vm['node']}/qemu/{vmid}"
+    if vm.get("status") != "running":
+        _launcher_start(root, call, name, base)
+    spice = call(f"{base}/spiceproxy", "POST")
+    if "error" in spice or not (spice.get("data") or {}).get("type"):
+        raise _LaunchStop(f"Couldn't open the console of {name}: {spice.get('error', 'no SPICE answer')}")
+    viewer = shutil.which("remote-viewer")
+    if not viewer:
+        raise _LaunchStop("remote-viewer isn't installed (package virt-viewer).")
+    # The viewer outlives this process; it deletes the .vv file once read
+    subprocess.Popen([viewer, write_vv_file(spice["data"])], start_new_session=True)
+
+
+def quick_connect(cluster_name, vmid):
+    """--connect CLUSTER VMID: open one VM's SPICE console without the manager window, as
+    the exported .desktop launchers do. Logs in like the manager (keyring token or a
+    password prompt, pinned certificate), offers to start a stopped VM. Returns an exit code."""
+    root = tk.Tk()
+    root.withdraw()
+    config = load_config(CONFIG_FILE)
+    apply_theme(config.get("theme", DEFAULT_THEME), config.get("accent", DEFAULT_ACCENT))
+    try:
+        _launcher_open(root, config, cluster_name, vmid)
+        return 0
+    except _LaunchStop as stop:
+        if stop.args[0]:
+            messagebox.showerror("Proxmox SPICE Manager", stop.args[0], parent=root)
+        return 1
+    finally:
+        root.destroy()
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == "--connect" and sys.argv[3].isdigit():
+        # A launcher opening one console; it doesn't take the manager's single-instance lock
+        sys.exit(quick_connect(sys.argv[2], int(sys.argv[3])))
     if not _acquire_instance_lock():
         root = tk.Tk()
         root.withdraw()
