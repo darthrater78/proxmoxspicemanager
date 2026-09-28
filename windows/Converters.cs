@@ -5,6 +5,52 @@ using ProxmoxSpiceManager.Models;
 
 namespace ProxmoxSpiceManager;
 
+// Orders VMs by one of the shared sort keys; node first when the list is grouped
+public class VmComparer(string key, bool descending, bool byNodeFirst) : IComparer
+{
+    public static readonly Dictionary<string, string> Labels = new()
+    {
+        ["name"] = "Name", ["vmid"] = "ID", ["ip"] = "Address", ["node"] = "Node",
+        ["pool"] = "Pool", ["snaps"] = "Snapshots", ["status"] = "Status", ["notes"] = "Notes",
+    };
+
+    public int Compare(object? x, object? y)
+    {
+        if (x is not VmDisplayItem a || y is not VmDisplayItem b) return 0;
+        if (byNodeFirst)
+        {
+            var node = string.Compare(a.Node, b.Node, StringComparison.OrdinalIgnoreCase);
+            if (node != 0) return node;
+        }
+        var result = key switch
+        {
+            "name" => Text(a.Name, b.Name),
+            "ip" => Ip(a.IpAddress).CompareTo(Ip(b.IpAddress)),
+            "node" => Text(a.Node, b.Node),
+            "pool" => Text(a.Pool, b.Pool),
+            "snaps" => a.SnapCount.CompareTo(b.SnapCount),
+            "status" => (a.IsRunning ? 0 : 1).CompareTo(b.IsRunning ? 0 : 1) is var r and not 0
+                ? r : Text(a.Status, b.Status),
+            "notes" => Text(a.Notes, b.Notes),
+            _ => a.VmId.CompareTo(b.VmId),
+        };
+        if (result == 0 && key != "vmid") result = a.VmId.CompareTo(b.VmId);
+        return descending ? -result : result;
+    }
+
+    // Blanks after values, then case-insensitive
+    private static int Text(string a, string b) =>
+        (a.Length == 0).CompareTo(b.Length == 0) is var blank and not 0
+            ? blank : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+
+    // IPv4 in numeric order; "", "no agent" and the like after every address
+    private static (int, uint, string) Ip(string ip) =>
+        System.Net.IPAddress.TryParse(ip, out var addr) &&
+        addr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+            ? (0, (uint)System.Net.IPAddress.NetworkToHostOrder(BitConverter.ToInt32(addr.GetAddressBytes())), "")
+            : (1, 0u, ip);
+}
+
 // A node group's items to "2/3 running"
 public class NodeSummaryConverter : IValueConverter
 {

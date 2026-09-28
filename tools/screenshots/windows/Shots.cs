@@ -130,6 +130,19 @@ static class Program
         Pump(400);
         Capture(w, Path.Combine(outDir, "windows-state-empty.png"));
         search.Text = "";
+
+        var config = Get<AppConfig>(w, "_config");
+        var group = (System.Windows.Controls.Primitives.ToggleButton)w.FindName("GroupToggle");
+        config.GroupByNode = false;
+        config.VmSort = "ip";
+        group.IsChecked = false;
+        Call(w, "ApplySortAndGrouping");
+        Pump(400);
+        Capture(w, Path.Combine(outDir, "windows-state-ungrouped.png"));
+        config.GroupByNode = true;
+        config.VmSort = "vmid";
+        group.IsChecked = true;
+        Call(w, "ApplySortAndGrouping");
         Log("states captured");
     }
 

@@ -18,7 +18,7 @@ Both platforms share one version number, and each release carries both the Windo
 - **Auto-discovery** — automatically detects SPICE-enabled VMs across all cluster nodes
 - **Live IP address** — shows each running VM's IP via QEMU guest agent (requires `VM.GuestAgent.Audit` permission)
 - **One-click SPICE launch** — opens `remote-viewer` sessions from a VM's Connect button (Windows), a double-click, or Enter
-- **VMs grouped by node** — each node shows how many of its VMs are running; search by name, ID, IP, pool, notes or OS, and filter to running or stopped VMs
+- **VMs grouped by node, or one flat list** — each node shows how many of its VMs are running; sort by any column, search by name, ID, IP, pool, notes or OS, and filter to running or stopped VMs
 - **VM power controls** — Start, ACPI Shutdown, Reboot and Force Stop; Ctrl-click or Shift-click to act on several VMs at once
 - **Keyboard shortcuts** — Enter opens the console, S starts, Shift+S shuts down, R reboots, P opens snapshots, Ctrl+. force stops, / searches, F5 refreshes
 - **Snapshot management** — create, rollback, and delete snapshots with a full dialog, plus quick-rollback to the latest snapshot

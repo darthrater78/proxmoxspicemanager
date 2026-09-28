@@ -42,9 +42,9 @@ public partial class MainWindow : Window
         VmList.ItemsSource = _vmItems;
         _vmView = CollectionViewSource.GetDefaultView(_vmItems);
         _vmView.Filter = VmFilterPredicate;
-        _vmView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VmDisplayItem.Node)));
-        _vmView.SortDescriptions.Add(new SortDescription(nameof(VmDisplayItem.Node), ListSortDirection.Ascending));
-        _vmView.SortDescriptions.Add(new SortDescription(nameof(VmDisplayItem.VmId), ListSortDirection.Ascending));
+        if (!VmComparer.Labels.ContainsKey(_config.VmSort)) _config.VmSort = "vmid";
+        GroupToggle.IsChecked = _config.GroupByNode;
+        ApplySortAndGrouping();
 
         RefreshClusterList();
         UpdateListState();
@@ -550,7 +550,11 @@ public partial class MainWindow : Window
         FilterRunning.Content = $"Running  {running}";
         FilterStopped.Content = $"Stopped  {_vmItems.Count - running}";
         _vmView?.Refresh();
-        var visible = _vmView?.OfType<VmDisplayItem>().Any() == true;
+        var first = _vmView?.OfType<VmDisplayItem>().FirstOrDefault();
+        var visible = first != null;
+        // Keep something selected (the top match after a search), so Enter always has a target
+        if (first != null && VmList.SelectedItems.Count == 0)
+            VmList.SelectedItem = first;
         EmptyText.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         EmptyText.Text = _vmItems.Count == 0
             ? (_selectedClusterIdx < 0 ? "Add a cluster to see its VMs" : "No SPICE VMs loaded")
@@ -567,6 +571,59 @@ public partial class MainWindow : Window
         if (q.Length == 0) return true;
         return new[] { vm.Name, vm.VmId.ToString(), vm.IpAddress, vm.Node, vm.Pool, vm.Notes, vm.OsLabel }
             .Any(f => f.Contains(q, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ── Grouping and sort ──────────────────────────────────────────────────
+    private void ApplySortAndGrouping()
+    {
+        if (_vmView is not ListCollectionView view) return;
+        var grouped = _config.GroupByNode;
+        // Regrouping rebuilds the rows and drops the selection; put it back after
+        var keep = GetSelectedVms();
+        using (view.DeferRefresh())
+        {
+            view.GroupDescriptions.Clear();
+            if (grouped)
+                view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VmDisplayItem.Node)));
+            view.CustomSort = new VmComparer(_config.VmSort, _config.VmSortDesc, grouped);
+            // IPs arrive after the list and notes change in place: keep their order current
+            view.IsLiveSorting = true;
+            view.LiveSortingProperties.Clear();
+            view.LiveSortingProperties.Add(nameof(VmDisplayItem.IpAddress));
+            view.LiveSortingProperties.Add(nameof(VmDisplayItem.Notes));
+        }
+        VmDisplayItem.ShowNode = !grouped;
+        foreach (var vm in _vmItems) vm.RefreshDetail();
+        SortText.Text = $"Sort: {VmComparer.Labels[_config.VmSort]} {(_config.VmSortDesc ? "▼" : "▲")}";
+        foreach (var vm in keep)
+            if (!VmList.SelectedItems.Contains(vm)) VmList.SelectedItems.Add(vm);
+        if (VmList.SelectedItem != null) VmList.ScrollIntoView(VmList.SelectedItem);
+    }
+
+    private void OnGroupToggle(object sender, RoutedEventArgs e)
+    {
+        _config.GroupByNode = GroupToggle.IsChecked == true;
+        SaveConfig();
+        ApplySortAndGrouping();
+    }
+
+    private void OnSortMenu(object sender, RoutedEventArgs e)
+    {
+        // Picking the current key again reverses the order, like a column heading
+        var entries = VmComparer.Labels.Select(kv => (MenuEntry?)new MenuEntry(
+            kv.Key == _config.VmSort ? $"✓  {kv.Value}  {(_config.VmSortDesc ? "▼" : "▲")}" : $"     {kv.Value}",
+            () => SortBy(kv.Key)));
+        ShowMenu(SortBtn, PlacementMode.Bottom, entries);
+    }
+
+    private void SortBy(string key)
+    {
+        if (key == _config.VmSort)
+            _config.VmSortDesc = !_config.VmSortDesc;
+        else
+            (_config.VmSort, _config.VmSortDesc) = (key, false);
+        SaveConfig();
+        ApplySortAndGrouping();
     }
 
     private void OnFilterChanged(object sender, RoutedEventArgs e)

@@ -45,9 +45,14 @@ public class VmDisplayItem : INotifyPropertyChanged
     public bool HasPool => Pool.Length > 0;
     public string PoolOrDash => HasPool ? Pool : "—";
 
-    // Second line of a row: "101 · desktops · Daily driver"
+    // Set when the list isn't grouped by node, so each row says where it runs
+    public static bool ShowNode { get; set; }
+
+    // Second line of a row: "101 · desktops · Daily driver", led by the node when ungrouped
     public string Detail => string.Join(" · ",
-        new[] { VmId.ToString(), Pool, Notes }.Where(s => s.Length > 0));
+        new[] { ShowNode ? Node : "", VmId.ToString(), Pool, Notes }.Where(s => s.Length > 0));
+
+    public void RefreshDetail() => OnPropertyChanged(nameof(Detail));
 
     public bool IsWindows => OsType.StartsWith('w');
     public string OsBadge => OsType switch

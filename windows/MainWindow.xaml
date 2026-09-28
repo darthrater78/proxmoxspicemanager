@@ -335,12 +335,47 @@
                         </StackPanel>
                     </DockPanel>
 
-                    <!-- Filter chips -->
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,4">
+                    <!-- Filter chips; grouping and sort on the right -->
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,8,4">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <ToggleButton x:Name="GroupToggle" Click="OnGroupToggle" Cursor="Hand" FocusVisualStyle="{x:Null}"
+                                      Margin="0,0,6,0" ToolTip="Group VMs under the node they run on">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="Bd" CornerRadius="14" Padding="12,5" BorderThickness="1"
+                                            Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path x:Name="Tick" Style="{StaticResource Glyph}" Data="{StaticResource IconCheck}" Width="14"
+                                                  Stroke="{DynamicResource ThemeText}" Margin="0,0,6,0" Visibility="Collapsed"/>
+                                            <TextBlock Text="Group by node" Foreground="{DynamicResource ThemeText}"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
+                                        </Trigger>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
+                                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ThemeSurface2}"/>
+                                            <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <Button x:Name="SortBtn" Style="{StaticResource CmdButton}" Padding="12,5" Click="OnSortMenu" ToolTip="Sort VMs">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock x:Name="SortText" Text="Sort: ID ▲"/>
+                                <Path Style="{StaticResource Glyph}" Data="{StaticResource IconChevron}" Width="12" Margin="6,0,0,0" StrokeThickness="1.3"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal">
                         <RadioButton x:Name="FilterAll" Style="{StaticResource Chip}" GroupName="VmFilter" IsChecked="True" Checked="OnFilterChanged" Content="All"/>
                         <RadioButton x:Name="FilterRunning" Style="{StaticResource Chip}" GroupName="VmFilter" Checked="OnFilterChanged" Content="Running"/>
                         <RadioButton x:Name="FilterStopped" Style="{StaticResource Chip}" GroupName="VmFilter" Checked="OnFilterChanged" Content="Stopped"/>
                     </StackPanel>
+                    </DockPanel>
 
                     <Grid>
                         <TextBlock x:Name="EmptyText" Text="No VMs to show" Foreground="{DynamicResource ThemeOverlay1}"

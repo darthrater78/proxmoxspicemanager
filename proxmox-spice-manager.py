@@ -908,6 +908,36 @@ def os_label(ostype):
     return OS_LABELS.get(ostype, ostype or "Unknown OS")
 
 
+# Sort keys, shared names with the Windows app's `vm_sort` config value
+SORT_LABELS = {
+    "name": "Name", "vmid": "ID", "ip": "Address", "node": "Node",
+    "pool": "Pool", "snaps": "Snapshots", "status": "Status", "notes": "Notes",
+}
+
+
+def _ip_key(ip):
+    """Numeric order for IPv4 addresses; anything else ("", "no agent") after them."""
+    parts = ip.split(".")
+    if len(parts) == 4 and all(p.isdigit() for p in parts):
+        return (0, tuple(int(p) for p in parts), "")
+    return (1, (), ip)
+
+
+def vm_sort_key(vm, column):
+    """The sort key for one column; blanks sort after values."""
+    if column == "vmid":
+        return vm["vmid"]
+    if column == "snaps":
+        return vm["snaps"]
+    if column == "ip":
+        return _ip_key(vm["ip"])
+    if column == "status":
+        return (vm["status"] != "running", vm["status"])
+    text = {"name": vm["name"], "node": vm["node"], "pool": vm["pool"],
+            "notes": vm["note"]}.get(column, "")
+    return (text == "", text.casefold())
+
+
 class KeyCap(tk.Label):
     """A key hint such as "F5"."""
 
@@ -1058,6 +1088,12 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._vms = []                 # dicts from the last refresh
         self._iid_to_vm = {}
         self._vm_filter = "all"
+        self._group_by_node = self.config_data.get("group_by_node", True)
+        self._sort_col = self.config_data.get("vm_sort", "vmid")
+        if self._sort_col not in SORT_LABELS:
+            self._sort_col = "vmid"
+        self._sort_desc = self.config_data.get("vm_sort_desc", False)
+        self._collapsed_nodes = set()
         self._cluster_idx = -1
         self._cluster_status = {}      # name -> (online, vm count)
         self._loaded_cluster = None
@@ -1292,23 +1328,24 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             chip.pack(side="left", padx=(0, 6))
             chip.bind("<Button-1>", lambda e, k=key: self._set_vm_filter(k))
             self._chips[key] = chip
+        self._group_chip = tk.Label(chips, padx=12, pady=3, font=(FONT, 10), cursor="hand2",
+                                    highlightthickness=1)
+        self._group_chip.pack(side="right")
+        self._group_chip.bind("<Button-1>", lambda e: self._toggle_grouping())
 
         table = tk.Frame(main, bg=C["base"])
         table.pack(fill="both", expand=True)
-        columns = ("os", "name", "vmid", "ip", "pool", "snaps", "status", "notes")
+        columns = ("os", "name", "vmid", "ip", "node", "pool", "snaps", "status", "notes")
         tree = ttk.Treeview(table, columns=columns, show="headings",
                             selectmode="extended", style="Vm.Treeview")
-        headings = {"os": "", "name": "NAME", "vmid": "ID", "ip": "ADDRESS",
-                    "pool": "POOL", "snaps": "SNAPS", "status": "STATUS", "notes": "NOTES"}
-        # Fits the default window; name and notes take any extra width
-        widths = {"os": (42, False), "name": (170, True), "vmid": (48, False),
-                  "ip": (110, False), "pool": (84, False), "snaps": (52, False),
-                  "status": (100, False), "notes": (100, True)}
         for col in columns:
-            tree.heading(col, text=headings[col], anchor="w")
-            width, stretch = widths[col]
-            tree.column(col, width=width, minwidth=40, stretch=stretch, anchor="w")
-        tree.tag_configure("group", foreground=C["subtext1"], font=(FONT, 9, "bold"))
+            tree.column(col, width=self.FIXED_WIDTHS.get(col, 120), minwidth=40,
+                        stretch=False, anchor="w")
+            if col != "os":
+                tree.heading(col, anchor="w", command=lambda c=col: self._sort_by(c))
+        # Node headings: a shaded band, so they read as sections, not as VMs
+        tree.tag_configure("group", foreground=C["text"], background=C["surface0"],
+                           font=(FONT, 10, "bold"))
         tree.tag_configure("running", foreground=C["text"])
         tree.tag_configure("stopped", foreground=C["overlay1"])
         scrollbar = ttk.Scrollbar(table, orient="vertical", command=tree.yview)
@@ -1324,8 +1361,11 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         tree.configure(yscrollcommand=autohide)
         tree.pack(side="left", fill="both", expand=True)
         tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        tree.bind("<Button-1>", self._on_tree_click)
+        tree.bind("<Configure>", lambda e: self._fit_columns())
         tree.bind("<Double-1>", self._on_vm_double_click)
         self.vm_tree = tree
+        self._update_headings()
         self._empty_label = tk.Label(table, bg=C["base"], fg=C["overlay1"], font=(FONT, 10))
 
     def _update_search_hint(self):
@@ -1364,6 +1404,12 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 highlightbackground=C["accent"] if on else C["surface1"],
                 font=(FONT, 10, "bold") if on else (FONT, 10),
             )
+        grouped = self._group_by_node
+        self._group_chip.config(
+            text="✓ Group by node" if grouped else "Group by node",
+            bg=C["surface1"] if grouped else C["surface0"], fg=C["text"],
+            highlightbackground=C["surface2"] if grouped else C["surface1"],
+        )
 
     def _vm_matches(self, vm, query):
         running = vm["status"] == "running"
@@ -1385,22 +1431,25 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         tree.delete(*tree.get_children())
         self._iid_to_vm = {}
         query = self.search_var.get().strip().lower()
-        visible = [vm for vm in self._vms if self._vm_matches(vm, query)]
-        for node in sorted({vm["node"] for vm in visible}):
-            vms = sorted((vm for vm in visible if vm["node"] == node), key=lambda v: v["vmid"])
-            running = sum(1 for vm in vms if vm["status"] == "running")
-            group = f"node:{node}"
-            tree.insert("", "end", iid=group, open=True, tags=("group",), values=(
-                "", node, "", "", "", "", f"{running}/{len(vms)} running", ""))
-            for vm in vms:
-                iid = f"vm:{vm['vmid']}"
-                is_running = vm["status"] == "running"
-                status = "● Running" if is_running else f"○ {vm['status'].title() or 'Unknown'}"
-                tree.insert(group, "end", iid=iid, tags=("running" if is_running else "stopped",),
-                            values=(os_badge(vm["ostype"]), vm["name"], vm["vmid"],
-                                    vm["ip"] or "—", vm["pool"] or "—", vm["snaps"],
-                                    status, vm["note"]))
-                self._iid_to_vm[iid] = vm
+        visible = sorted((vm for vm in self._vms if self._vm_matches(vm, query)),
+                         key=lambda v: vm_sort_key(v, self._sort_col), reverse=self._sort_desc)
+        tree["displaycolumns"] = [c for c in tree["columns"]
+                                  if c != "node" or not self._group_by_node]
+        self._fit_columns()
+        if self._group_by_node:
+            for node in sorted({vm["node"] for vm in visible}):
+                vms = [vm for vm in visible if vm["node"] == node]
+                running = sum(1 for vm in vms if vm["status"] == "running")
+                is_open = node not in self._collapsed_nodes
+                group = f"node:{node}"
+                tree.insert("", "end", iid=group, open=is_open, tags=("group",), values=(
+                    "", f"{'▾' if is_open else '▸'}  {node}", "", "", "", "", "",
+                    f"{running}/{len(vms)} running", ""))
+                for vm in vms:
+                    self._insert_vm(group, vm)
+        else:
+            for vm in visible:
+                self._insert_vm("", vm)
         self._update_chips()
 
         if visible:
@@ -1423,6 +1472,68 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             tree.focus(selection[0])
             tree.see(selection[0])
         self._update_inspector()
+
+    def _insert_vm(self, parent, vm):
+        iid = f"vm:{vm['vmid']}"
+        is_running = vm["status"] == "running"
+        status = "● Running" if is_running else f"○ {vm['status'].title() or 'Unknown'}"
+        self.vm_tree.insert(parent, "end", iid=iid, tags=("running" if is_running else "stopped",),
+                            values=(os_badge(vm["ostype"]), vm["name"], vm["vmid"],
+                                    vm["ip"] or "—", vm["node"], vm["pool"] or "—",
+                                    vm["snaps"], status, vm["note"]))
+        self._iid_to_vm[iid] = vm
+
+    # Name and notes share what the fixed columns leave; Tk won't shrink them itself
+    FIXED_WIDTHS = {"os": 40, "vmid": 48, "ip": 106, "node": 70, "pool": 78,
+                    "snaps": 58, "status": 96}
+
+    def _fit_columns(self):
+        tree = self.vm_tree
+        shown = tree["displaycolumns"]
+        if shown in ("#all", ("#all",)):
+            shown = tree["columns"]
+        spare = tree.winfo_width() - sum(self.FIXED_WIDTHS.get(c, 0) for c in shown) - 4
+        name = max(120, int(spare * 0.65))
+        tree.column("name", width=name)
+        tree.column("notes", width=max(70, spare - name))
+
+    def _update_headings(self):
+        for col, label in SORT_LABELS.items():
+            text = "SNAPS" if col == "snaps" else label.upper()
+            if col == self._sort_col:
+                text += "  ▼" if self._sort_desc else "  ▲"
+            self.vm_tree.heading(col, text=text)
+
+    def _sort_by(self, column):
+        """Heading click: sort by that column; clicking it again reverses."""
+        if column == self._sort_col:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_col, self._sort_desc = column, False
+        self.config_data["vm_sort"] = self._sort_col
+        self.config_data["vm_sort_desc"] = self._sort_desc
+        self._save_config()
+        self._update_headings()
+        self._render_vms()
+
+    def _toggle_grouping(self):
+        self._group_by_node = not self._group_by_node
+        self.config_data["group_by_node"] = self._group_by_node
+        self._save_config()
+        self._render_vms()
+
+    def _on_tree_click(self, event):
+        """A click on a node heading folds or unfolds it and leaves the selection alone."""
+        iid = self.vm_tree.identify_row(event.y)
+        if not iid.startswith("node:"):
+            return None
+        node = iid[len("node:"):]
+        if node in self._collapsed_nodes:
+            self._collapsed_nodes.discard(node)
+        else:
+            self._collapsed_nodes.add(node)
+        self._render_vms()
+        return "break"
 
     def _focus_tree(self):
         tree = self.vm_tree
@@ -1451,17 +1562,47 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         return None
 
     def _on_tree_select(self, event=None):
-        groups = [iid for iid in self.vm_tree.selection() if iid not in self._iid_to_vm]
+        tree = self.vm_tree
+        groups = [iid for iid in tree.selection() if iid not in self._iid_to_vm]
         if groups:
-            # Node headings aren't VMs; clicking one selects nothing
-            self.vm_tree.selection_remove(groups)
+            # Node headings aren't VMs. Arrow keys can still land on one: step
+            # onto its first VM instead of leaving nothing selected.
+            tree.selection_remove(groups)
+            if not tree.selection():
+                target = self._vm_beside_heading(groups[0])
+                if target:
+                    tree.selection_set(target)
+                    tree.focus(target)
             return
+        selected = tree.selection()
+        if selected:
+            self._last_vm_iid = selected[-1]
         self._update_inspector()
+
+    def _vm_beside_heading(self, heading):
+        """The VM next to a node heading, in the direction the arrow keys came from."""
+        order = list(self._iid_to_vm)  # display order
+        children = [c for c in self.vm_tree.get_children(heading) if c in self._iid_to_vm] \
+            if self.vm_tree.item(heading, "open") else []
+        # The first VM shown after this heading, whatever group it's in
+        after = children[0] if children else None
+        if after is None:
+            later = self.vm_tree.next(heading)
+            while later and not after:
+                kids = self.vm_tree.get_children(later) if self.vm_tree.item(later, "open") else ()
+                after = kids[0] if kids else None
+                later = self.vm_tree.next(later)
+        last = getattr(self, "_last_vm_iid", None)
+        if last in order and after in order and order.index(last) >= order.index(after):
+            # Coming up from below: stop on the VM just above the heading
+            idx = order.index(after) - 1
+            return order[idx] if idx >= 0 else last
+        return after or last
 
     def _on_vm_double_click(self, event):
         iid = self.vm_tree.identify_row(event.y)
         if iid not in self._iid_to_vm:
-            return None  # a node heading: the default binding folds it
+            return "break"  # a node heading; the single click already folded it
         self.vm_tree.selection_set(iid)
         self._launch_spice()
         return "break"

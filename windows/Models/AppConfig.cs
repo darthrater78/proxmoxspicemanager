@@ -16,6 +16,16 @@ public class AppConfig
     [JsonPropertyName("accent")]
     public string Accent { get; set; } = Themes.DefaultAccent;
 
+    [JsonPropertyName("group_by_node")]
+    public bool GroupByNode { get; set; } = true;
+
+    // Sort key shared with the Linux app: name, vmid, ip, node, pool, snaps, status, notes
+    [JsonPropertyName("vm_sort")]
+    public string VmSort { get; set; } = "vmid";
+
+    [JsonPropertyName("vm_sort_desc")]
+    public bool VmSortDesc { get; set; }
+
     [JsonPropertyName("column_order")]
     public List<string>? ColumnOrder { get; set; }
 

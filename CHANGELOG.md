@@ -13,9 +13,14 @@ to the other where the platforms allow it.
 ### Changed
 
 - **Redesigned main window, on both platforms.** VMs are grouped by node with a
-  running count per node. A search box (name, ID, IP, node, pool, notes, OS)
-  and All / Running / Stopped filters replace the per-column filters, sorting
-  and column dragging. A panel on the right shows the selected VM's details,
+  running count per node, or in one flat list ("Group by node" toggles it; the
+  flat list shows each VM's node). A search box (name, ID, IP, node, pool,
+  notes, OS) and All / Running / Stopped filters replace the per-column
+  filters and column dragging. Sort by name, ID, address, node, pool,
+  snapshots, status or notes: Linux by clicking a column heading, Windows from
+  the Sort button; picking the same key again reverses it. Grouping and sort
+  are saved (`group_by_node`, `vm_sort`, `vm_sort_desc`, shared by both apps).
+  Linux node headings are shaded and fold with a click. A panel on the right shows the selected VM's details,
   its notes and every action; Quick Rollback lives there as "Roll back to
   latest snapshot". Cluster editing, import and export, the debug log,
   prerequisites, the project links and (Linux) the app-menu and `.desktop`
