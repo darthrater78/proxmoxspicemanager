@@ -97,7 +97,8 @@ to the other where the platforms allow it.
   a read-only "Proxmox" row of the details panel.
 - Windows: notes get their own column in the VM list, instead of trailing the
   grey second line, and the list has column headings that sort when clicked,
-  like on Linux.
+  like on Linux. On both apps every heading carries a ↕ mark, and the sorted
+  one shows ▲ or ▼ (in the accent colour on Windows).
 - Windows: node headings are a shaded band that folds its VMs away when
   clicked, like on Linux.
 - GitHub and Release notes links in the app header, moved out of Settings.

@@ -617,11 +617,14 @@ public partial class MainWindow : Window
         VmDisplayItem.ShowNode = !grouped;
         foreach (var vm in _vmItems) vm.RefreshDetail();
         SortText.Text = $"Sort: {VmComparer.Labels[_config.VmSort]} {(_config.VmSortDesc ? "▼" : "▲")}";
-        foreach (var heading in ColumnHeadings.Children.OfType<TextBlock>())
+        // Every heading carries a sort mark so it reads as clickable: ↕ dim, ▲/▼ on the sorted one
+        foreach (var heading in ColumnHeadings.Children.OfType<Button>())
         {
             var key = (string)heading.Tag;
             var label = key == "snaps" ? "SNAPS" : VmComparer.Labels[key].ToUpperInvariant();
-            heading.Text = key == _config.VmSort ? $"{label}  {(_config.VmSortDesc ? "▼" : "▲")}" : label;
+            var sorted = key == _config.VmSort;
+            heading.Content = $"{label}  {(sorted ? (_config.VmSortDesc ? "▼" : "▲") : "↕")}";
+            heading.SetResourceReference(ForegroundProperty, sorted ? "ThemeAccent" : "ThemeSubtext0");
         }
         foreach (var vm in keep.Where(IsShown))
             if (!VmList.SelectedItems.Contains(vm)) VmList.SelectedItems.Add(vm);
@@ -631,7 +634,7 @@ public partial class MainWindow : Window
     // ── Address column ─────────────────────────────────────────────────────
     // Row parts besides name, address and notes: OS badge, snapshots, status,
     // button, the row's padding and room for the scrollbar
-    private const double FixedRowWidth = 42 + 46 + 86 + 98 + 20 + 8 + 18;
+    private const double FixedRowWidth = 42 + 62 + 86 + 98 + 20 + 8 + 18;
     private const double MinAddressWidth = 118, MinNameAndNotes = 120 + 60;
 
     private void OnVmListResized(object sender, SizeChangedEventArgs e)
@@ -716,9 +719,9 @@ public partial class MainWindow : Window
         ApplySortAndGrouping();
     }
 
-    private void OnHeadingClick(object sender, MouseButtonEventArgs e)
+    private void OnHeadingClick(object sender, RoutedEventArgs e)
     {
-        if (sender is TextBlock { Tag: string key }) SortBy(key);
+        if (sender is Button { Tag: string key }) SortBy(key);
     }
 
     private void OnSortMenu(object sender, RoutedEventArgs e)

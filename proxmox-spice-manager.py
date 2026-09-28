@@ -1153,6 +1153,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._collapsed_nodes = set()
         self._show_ipv6 = bool(self.config_data.get("show_ipv6", False))
         self._row_font = tkfont.Font(font=(FONT, 10))
+        self._heading_font = tkfont.Font(font=(FONT, 11, "bold"))  # node headings
         self._cluster_idx = -1
         self._cluster_status = {}      # name -> (online, vm count)
         self._loaded_cluster = None
@@ -1269,10 +1270,11 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             foreground=[("selected", C["text"])],
         )
         style.configure(
-            "Vm.Treeview.Heading", background=C["base"], foreground=C["overlay1"],
-            font=(FONT, 8, "bold"), borderwidth=0, relief="flat", padding=(6, 4),
+            "Vm.Treeview.Heading", background=C["base"], foreground=C["subtext0"],
+            font=(FONT, 9, "bold"), borderwidth=0, relief="flat", padding=(6, 4),
         )
-        style.map("Vm.Treeview.Heading", background=[("active", C["base"])])
+        style.map("Vm.Treeview.Heading", background=[("active", C["surface0"])],
+                  foreground=[("active", C["text"])])
         style.layout("Vm.Treeview", [("Vm.Treeview.treearea", {"sticky": "nswe"})])
 
         sidebar = tk.Frame(self, bg=C["crust"], width=232)
@@ -1526,7 +1528,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 is_open = node not in self._collapsed_nodes
                 group = f"node:{node}"
                 tree.insert("", "end", iid=group, open=is_open, tags=("group",), values=(
-                    "", f"{'▾' if is_open else '▸'}  {node}  ·  {running}/{len(vms)} running",
+                    "", self._node_heading(node, is_open, running, len(vms)),
                     "", "", "", "", "", "", ""))
                 for vm in vms:
                     self._insert_vm(group, vm)
@@ -1598,19 +1600,20 @@ class ProxmoxSpiceManagerBase(tk.Tk):
     # Name, address and notes share what the fixed columns leave; Tk won't size
     # them itself. The address width here is its minimum.
     FIXED_WIDTHS = {"os": 40, "vmid": 48, "ip": 118, "node": 70, "pool": 78,
-                    "snaps": 58, "status": 96}
+                    "snaps": 72, "status": 88}
     # Dropped first when the list is too narrow, so status and notes stay on screen
     OPTIONAL_COLUMNS = ("pool", "snaps", "node", "vmid", "ip")
-    MIN_NAME, MIN_NOTES = 110, 80
+    MIN_NAME, MIN_NOTES = 106, 80
     CELL_PADDING = 12
 
     def _fit_columns(self):
         tree = self.vm_tree
         shown = [c for c in tree["columns"] if c != "node" or not self._group_by_node]
         width = tree.winfo_width() - 4
+        min_name = self._min_name_width()
         for col in self.OPTIONAL_COLUMNS:
             fixed = sum(self.FIXED_WIDTHS.get(c, 0) for c in shown)
-            if fixed + self.MIN_NAME + self.MIN_NOTES <= width:
+            if fixed + min_name + self.MIN_NOTES <= width:
                 break
             if col in shown and col != self._sort_col:
                 shown.remove(col)
@@ -1620,11 +1623,11 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             # A wider window shows more of each VM's addresses, up to all of them
             needed = max((self._row_font.measure(", ".join(ip for _, ip in vm_ips(vm, self._show_ipv6)))
                           for vm in self._vms), default=0) + self.CELL_PADDING
-            free = spare - self.MIN_NAME - self.MIN_NOTES
+            free = spare - min_name - self.MIN_NOTES
             extra = max(0, min(needed - self.FIXED_WIDTHS["ip"], int(free * 0.5)))
             tree.column("ip", width=self.FIXED_WIDTHS["ip"] + extra)
             spare -= extra
-        name = max(self.MIN_NAME, min(int(spare * 0.65), spare - self.MIN_NOTES))
+        name = max(min_name, min(int(spare * 0.65), spare - self.MIN_NOTES))
         tree.column("name", width=name)
         tree.column("notes", width=max(self.MIN_NOTES, spare - name))
         for iid, vm in self._iid_to_vm.items():
@@ -1632,9 +1635,12 @@ class ProxmoxSpiceManagerBase(tk.Tk):
 
     def _update_headings(self):
         for col, label in SORT_LABELS.items():
+            # Every heading carries a sort mark so it reads as clickable
             text = "SNAPS" if col == "snaps" else label.upper()
             if col == self._sort_col:
-                text += "  ▼" if self._sort_desc else "  ▲"
+                text += " ▼" if self._sort_desc else " ▲"
+            else:
+                text += " ↕"
             self.vm_tree.heading(col, text=text)
 
     def _sort_by(self, column):
@@ -1667,6 +1673,18 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             self._collapsed_nodes.add(node)
         self._render_vms()
         return "break"
+
+    @staticmethod
+    def _node_heading(node, is_open, running, total):
+        return f"{'▾' if is_open else '▸'}  {node}  ·  {running}/{total} running"
+
+    def _min_name_width(self):
+        """Name column minimum; when grouped, wide enough for every node heading."""
+        if not self._group_by_node:
+            return self.MIN_NAME
+        widest = max((self._heading_font.measure(self._node_heading(vm["node"], True, 99, 99))
+                      for vm in self._vms), default=0)
+        return max(self.MIN_NAME, widest + self.CELL_PADDING)
 
     def _shown_vm_iids(self):
         """VM rows on screen, in list order: not inside a folded node heading."""

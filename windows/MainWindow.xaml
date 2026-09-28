@@ -79,18 +79,30 @@
             </Setter>
         </Style>
         <!-- List column headings: click to sort, like the Linux app -->
-        <Style x:Key="ColumnHeading" TargetType="TextBlock">
+        <!-- A button-like heading, so it reads as clickable; the sorted one is in the accent (UpdateHeadings) -->
+        <Style x:Key="ColumnHeading" TargetType="Button">
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="{DynamicResource ThemeOverlay1}"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="ToolTip" Value="Sort by this column"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="Margin" Value="-7,0,0,0"/>
+            <Setter Property="ToolTip" Value="Sort by this column; click again to reverse"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="5" Padding="7,3" Background="Transparent">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <!-- Key cap, e.g. "F5" -->
@@ -422,15 +434,15 @@
                             <ColumnDefinition Width="3*" MinWidth="120"/>
                             <ColumnDefinition Width="{DynamicResource AddressColumnWidth}"/>
                             <ColumnDefinition Width="2*" MinWidth="60"/>
-                            <ColumnDefinition Width="46"/>
+                            <ColumnDefinition Width="62"/>
                             <ColumnDefinition Width="86"/>
                             <ColumnDefinition Width="98"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="1" Tag="name" Text="NAME" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
-                        <TextBlock Grid.Column="2" Tag="ip" Text="ADDRESS" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
-                        <TextBlock Grid.Column="3" Tag="notes" Text="NOTES" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
-                        <TextBlock Grid.Column="4" Tag="snaps" Text="SNAPS" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
-                        <TextBlock Grid.Column="5" Tag="status" Text="STATUS" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
+                        <Button Grid.Column="1" Tag="name" Content="NAME" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
+                        <Button Grid.Column="2" Tag="ip" Content="ADDRESS" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
+                        <Button Grid.Column="3" Tag="notes" Content="NOTES" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
+                        <Button Grid.Column="4" Tag="snaps" Content="SNAPS" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
+                        <Button Grid.Column="5" Tag="status" Content="STATUS" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
                     </Grid>
 
                     <Grid>
@@ -517,7 +529,7 @@
                                                 <!-- Same width on every row, set by UpdateAddressColumn -->
                                                 <ColumnDefinition Width="{DynamicResource AddressColumnWidth}"/>
                                                 <ColumnDefinition Width="2*" MinWidth="60"/>
-                                                <ColumnDefinition Width="46"/>
+                                                <ColumnDefinition Width="62"/>
                                                 <ColumnDefinition Width="86"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
