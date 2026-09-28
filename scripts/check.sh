@@ -26,5 +26,5 @@ done
 # Correctness rules only (syntax errors, undefined names, unused code).
 ruff check --isolated --select E9,F proxmox-spice-manager.py
 
-shellcheck scripts/*.sh
+shellcheck scripts/*.sh tools/screenshots/run.sh
 echo "Shell: scripts pass shellcheck"

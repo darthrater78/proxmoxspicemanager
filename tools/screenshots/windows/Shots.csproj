@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Screenshot harness: runs the app's real MainWindow with mock clusters and VMs and saves
+       PNGs. Run through ../run.sh (Wine + Xvfb); see ../README.md. Not part of the shipped app. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Shots</AssemblyName>
+    <RootNamespace>ProxmoxSpiceManager.Shots</RootNamespace>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The app's XAML loads its icon from the entry assembly, which is this harness -->
+    <Resource Include="../../../icon.ico" Link="icon.ico" />
+    <!-- Design prototypes are loose XAML, loaded at run time -->
+    <Page Remove="proposals/**" />
+    <None Include="proposals/**" />
+    <ProjectReference Include="../../../windows/ProxmoxSpiceManager.csproj" />
+  </ItemGroup>
+</Project>

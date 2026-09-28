@@ -36,6 +36,8 @@ to the other where the platforms allow it.
   picked from the Appearance button next to Settings. Text on the accent colour
   switches between dark and light for contrast. Saved as `accent` in the config.
 - Windows: an OS badge and name per VM, read from the VM's `ostype`.
+- `tools/screenshots/`: renders the Windows app on Linux (Wine and Xvfb) with
+  mock data, in every theme, for documentation and design review.
 
 ## [3.0.0] - 2026-09-27
 

@@ -1,0 +1,122 @@
+<!-- Direction B, "Launchpad": the app's job is opening consoles, so every VM is a card with
+     one big action. Clusters are tabs; ink-blue ground with a cyan accent. -->
+<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      Width="1280" Height="760" Background="#0F141B" TextElement.FontFamily="Segoe UI" TextElement.FontSize="13">
+    <Grid.Resources>
+        <SolidColorBrush x:Key="Accent" Color="#3DD6D0"/>
+        <SolidColorBrush x:Key="Ink" Color="#EEF3F8"/>
+        <SolidColorBrush x:Key="Sub" Color="#8A98A8"/>
+    </Grid.Resources>
+    <DockPanel Margin="32,24,32,24">
+        <!-- Top bar: brand, cluster tabs, actions -->
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,26">
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,36,0">
+                <Border Width="30" Height="30" CornerRadius="15" BorderBrush="{StaticResource Accent}" BorderThickness="2">
+                    <Ellipse Width="10" Height="10" Fill="{StaticResource Accent}"/>
+                </Border>
+                <TextBlock Text="SPICE" FontSize="18" FontWeight="Bold" Foreground="{StaticResource Ink}" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                <TextBlock Text="launchpad" FontSize="18" Foreground="{StaticResource Sub}" Margin="5,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <Border CornerRadius="17" Background="#18202A" BorderBrush="#263241" BorderThickness="1" Padding="14,7" Margin="0,0,8,0">
+                    <TextBlock Text="Search  ( / )" Foreground="#6F7E8F"/>
+                </Border>
+                <Border CornerRadius="17" Background="#18202A" BorderBrush="#263241" BorderThickness="1" Padding="14,7">
+                    <TextBlock Text="Refresh" Foreground="{StaticResource Ink}"/>
+                </Border>
+            </StackPanel>
+            <ItemsControl ItemsSource="{Binding Clusters}" VerticalAlignment="Center">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border x:Name="Tab" CornerRadius="17" Padding="16,7" Margin="0,0,6,0">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse x:Name="Dot" Width="7" Height="7" Fill="#4ADE80" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="Label" Text="{Binding Name}" Foreground="{StaticResource Sub}" FontWeight="SemiBold"/>
+                            </StackPanel>
+                        </Border>
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding Selected}" Value="True">
+                                <Setter TargetName="Tab" Property="Background" Value="#1E2A37"/>
+                                <Setter TargetName="Label" Property="Foreground" Value="#EEF3F8"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Online}" Value="False">
+                                <Setter TargetName="Dot" Property="Fill" Value="#4B5563"/>
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </DockPanel>
+
+        <!-- Section heading -->
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+            <TextBlock DockPanel.Dock="Right" Foreground="{StaticResource Sub}" VerticalAlignment="Bottom">
+                <Run Text="{Binding RunningCount, Mode=OneWay}" Foreground="#3DD6D0" FontWeight="Bold"/><Run Text=" running   "/><Run Text="{Binding StoppedCount, Mode=OneWay}" Foreground="#EEF3F8" FontWeight="Bold"/><Run Text=" stopped"/>
+            </TextBlock>
+            <TextBlock Text="Homelab" FontSize="34" FontWeight="Light" Foreground="{StaticResource Ink}"/>
+        </DockPanel>
+
+        <!-- Cards -->
+        <ItemsControl ItemsSource="{Binding Vms}">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><UniformGrid Columns="4"/></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border x:Name="Card" Margin="0,0,14,14" CornerRadius="12" Background="#161E28" BorderBrush="#223040" BorderThickness="1" Padding="18,16">
+                        <DockPanel>
+                            <!-- Header: OS badge, status -->
+                            <DockPanel DockPanel.Dock="Top">
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Ellipse x:Name="Led" Width="8" Height="8" Fill="#4ADE80">
+                                        <Ellipse.Effect><DropShadowEffect Color="#4ADE80" BlurRadius="10" ShadowDepth="0" Opacity="0.9"/></Ellipse.Effect>
+                                    </Ellipse>
+                                    <TextBlock x:Name="State" Text="{Binding Status}" Foreground="#9BE9B5" FontSize="12" Margin="7,0,0,0"/>
+                                </StackPanel>
+                                <Border CornerRadius="5" Background="#1F2A36" Padding="7,2" HorizontalAlignment="Left">
+                                    <TextBlock Text="{Binding OsLabel}" FontSize="11" Foreground="#AFC0D1"/>
+                                </Border>
+                            </DockPanel>
+                            <!-- Action -->
+                            <Border x:Name="Action" DockPanel.Dock="Bottom" CornerRadius="8" Background="{StaticResource Accent}" Padding="0,9" Margin="0,14,0,0">
+                                <TextBlock x:Name="ActionText" Text="Open console" HorizontalAlignment="Center" FontWeight="SemiBold" Foreground="#06201F"/>
+                            </Border>
+                            <!-- Body -->
+                            <StackPanel Margin="0,14,0,0">
+                                <TextBlock x:Name="Name" Text="{Binding Name}" FontSize="19" FontWeight="SemiBold" Foreground="{StaticResource Ink}" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding IpOrDash}" FontFamily="Cascadia Code" FontSize="12" Foreground="#AFC0D1" Margin="0,6,0,0"/>
+                                <TextBlock Foreground="{StaticResource Sub}" FontSize="12" Margin="0,4,0,0">
+                                    <Run Text="#"/><Run Text="{Binding Id, Mode=OneWay}"/><Run Text="  ·  "/><Run Text="{Binding Node, Mode=OneWay}"/><Run Text="  ·  "/><Run Text="{Binding SnapsText, Mode=OneWay}"/>
+                                </TextBlock>
+                                <TextBlock x:Name="Notes" Text="{Binding Notes}" FontStyle="Italic" Foreground="#C7D2DE" FontSize="12" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding Running}" Value="False">
+                            <Setter TargetName="Led" Property="Fill" Value="#4B5563"/>
+                            <Setter TargetName="Led" Property="Effect" Value="{x:Null}"/>
+                            <Setter TargetName="State" Property="Foreground" Value="#7B8794"/>
+                            <Setter TargetName="Card" Property="Background" Value="#121821"/>
+                            <Setter TargetName="Name" Property="Foreground" Value="#A9B4C0"/>
+                            <Setter TargetName="Action" Property="Background" Value="#1E2A37"/>
+                            <Setter TargetName="ActionText" Property="Text" Value="Start"/>
+                            <Setter TargetName="ActionText" Property="Foreground" Value="#EEF3F8"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding HasNotes}" Value="False">
+                            <Setter TargetName="Notes" Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Selected}" Value="True">
+                            <Setter TargetName="Card" Property="BorderBrush" Value="#3DD6D0"/>
+                            <Setter TargetName="Card" Property="BorderThickness" Value="1.5"/>
+                        </DataTrigger>
+                    </DataTemplate.Triggers>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </DockPanel>
+</Grid>

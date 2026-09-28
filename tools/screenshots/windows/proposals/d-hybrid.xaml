@@ -1,0 +1,359 @@
+<!-- Direction D, "Hybrid" (theme-aware: every color is a Theme* brush): A's Fluent shell (orange accent, nav pane, search, filter chips,
+     Connect on every row) with C's node grouping, selection inspector and key hints. -->
+<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      Width="1280" Height="760" TextElement.FontFamily="Segoe UI" TextElement.FontSize="13" Background="{DynamicResource ThemeCrust}">
+    <Grid.Resources>
+        <BooleanToVisibilityConverter x:Key="Vis"/>
+        <FontFamily x:Key="Mono">Cascadia Code</FontFamily>
+        <Style x:Key="Glyph" TargetType="Path">
+            <Setter Property="Stroke" Value="{DynamicResource ThemeSubtext1}"/>
+            <Setter Property="StrokeThickness" Value="1.4"/>
+            <Setter Property="StrokeStartLineCap" Value="Round"/>
+            <Setter Property="StrokeEndLineCap" Value="Round"/>
+            <Setter Property="StrokeLineJoin" Value="Round"/>
+            <Setter Property="Width" Value="16"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Stretch" Value="None"/>
+        </Style>
+        <!-- Key cap, e.g. "F5" -->
+        <Style x:Key="Key" TargetType="Border">
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeSurface2}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="5,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="KeyText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Cascadia Code"/>
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeOverlay1}"/>
+        </Style>
+        <Style x:Key="CmdButton" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}" BorderThickness="1" CornerRadius="6" Padding="10,6">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Grid.Resources>
+    
+    <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="232"/>
+        <ColumnDefinition Width="*"/>
+    </Grid.ColumnDefinitions>
+
+    <!-- Navigation pane (A) -->
+    <DockPanel Grid.Column="0" Margin="12,14,8,12">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,4,0,22">
+            <Border Width="28" Height="28" CornerRadius="7" Background="{DynamicResource ThemeAccent}">
+                <Path Data="M3,4 H13 V10 H3 Z M6,13 H10 M8,10 V13" Stroke="{DynamicResource ThemeOnAccent}" StrokeThickness="1.6" Width="16" Height="16" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+            </Border>
+            <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                <TextBlock Text="SPICE Manager" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}"/>
+                <TextBlock Text="for Proxmox VE · v3.0.0" FontSize="11" Foreground="{DynamicResource ThemeSubtext0}"/>
+            </StackPanel>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom">
+            <Border Height="1" Background="{DynamicResource ThemeSurface1}" Margin="8,0,8,8"/>
+            <StackPanel Orientation="Horizontal" Margin="8,6">
+                <Path Style="{StaticResource Glyph}" Data="M8,3 V13 M3,8 H13"/>
+                <TextBlock Text="Add cluster" Margin="10,0,0,0" Foreground="{DynamicResource ThemeText}"/>
+            </StackPanel>
+            <DockPanel Margin="8,2,4,0">
+                <!-- Appearance quick switch: current accent and theme, opens the flyout -->
+                <Border x:Name="QuickSwitch" DockPanel.Dock="Right" CornerRadius="6" Padding="8,5" BorderThickness="1" Background="{DynamicResource ThemeSurface0}" ToolTip="Appearance">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="BorderBrush" Value="{DynamicResource ThemeSurface1}"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ShowAppearance}" Value="True">
+                                    <Setter Property="BorderBrush" Value="{DynamicResource ThemeAccent}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="10" Height="10" Fill="{DynamicResource ThemeAccent}"/>
+                        <Ellipse Width="10" Height="10" Fill="{DynamicResource ThemeBase}" Stroke="{DynamicResource ThemeSurface2}" Margin="-3,0,0,0"/>
+                        <Path Style="{StaticResource Glyph}" Width="10" Data="M1.5,6 L5,9.5 L8.5,6" Margin="6,0,0,0" StrokeThickness="1.3"/>
+                    </StackPanel>
+                </Border>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Path Style="{StaticResource Glyph}" Data="M8,2.5 A5.5,5.5 0 1 0 8,13.5 A5.5,5.5 0 1 0 8,2.5 M8,6 V8.5 M8,10.8 V11"/>
+                    <TextBlock Text="Settings" Margin="10,0,0,0" Foreground="{DynamicResource ThemeText}"/>
+                </StackPanel>
+            </DockPanel>
+        </StackPanel>
+        <StackPanel>
+            <TextBlock Text="Clusters" FontSize="12" Foreground="{DynamicResource ThemeSubtext0}" Margin="10,0,0,6"/>
+            <ItemsControl ItemsSource="{Binding Clusters}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border x:Name="Row" CornerRadius="6" Padding="10,9" Margin="0,1">
+                            <Grid>
+                                <Border x:Name="Pill" Width="3" Height="16" CornerRadius="1.5" Background="{DynamicResource ThemeAccent}" HorizontalAlignment="Left" Margin="-10,0,0,0" Visibility="Collapsed"/>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountText}" Foreground="{DynamicResource ThemeSubtext0}" FontSize="12"/>
+                                    <Ellipse x:Name="Dot" Width="7" Height="7" Fill="{DynamicResource ThemeGreen}" Margin="0,0,10,0"/>
+                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ThemeText}"/>
+                                </DockPanel>
+                            </Grid>
+                        </Border>
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding Selected}" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource ThemeSurface0}"/>
+                                <Setter TargetName="Pill" Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Online}" Value="False">
+                                <Setter TargetName="Dot" Property="Fill" Value="{DynamicResource ThemeOverlay0}"/>
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+    </DockPanel>
+
+    <!-- Content layer -->
+    <Border Grid.Column="1" Margin="0,8,8,8" CornerRadius="8" Background="{DynamicResource ThemeBase}" BorderBrush="{DynamicResource ThemeSurface0}" BorderThickness="1">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="290"/>
+            </Grid.ColumnDefinitions>
+
+            <DockPanel Grid.Column="0" Margin="24,20,20,16">
+                <!-- Header -->
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Width="210" Height="32" CornerRadius="6" Background="{DynamicResource ThemeMantle}" BorderBrush="{DynamicResource ThemeSurface1}" BorderThickness="1" Margin="0,0,8,0">
+                            <DockPanel Margin="10,0,8,0">
+                                <Border DockPanel.Dock="Right" Style="{StaticResource Key}"><TextBlock Text="/" Style="{StaticResource KeyText}"/></Border>
+                                <Path Style="{StaticResource Glyph}" Stroke="{DynamicResource ThemeOverlay1}" Data="M7,2.5 A4.5,4.5 0 1 0 7,11.5 A4.5,4.5 0 1 0 7,2.5 M10.3,10.3 L13.5,13.5"/>
+                                <TextBlock Text="Search VMs" Foreground="{DynamicResource ThemeOverlay1}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Border>
+                        <Button Style="{StaticResource CmdButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource Glyph}" Data="M13,8 A5,5 0 1 1 11.5,4.5 M11.5,1.8 V4.6 H8.7"/>
+                                <TextBlock Text="Refresh" Margin="8,0,8,0" VerticalAlignment="Center"/>
+                                <Border Style="{StaticResource Key}"><TextBlock Text="F5" Style="{StaticResource KeyText}"/></Border>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Text="Homelab" FontSize="26" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}"/>
+                        <TextBlock Foreground="{DynamicResource ThemeSubtext0}" Margin="0,2,0,0">
+                            <Run Text="{Binding TotalCount, Mode=OneWay}"/><Run Text=" SPICE VMs · 3 nodes · homelab.example.com"/>
+                        </TextBlock>
+                    </StackPanel>
+                </DockPanel>
+
+                <!-- Filter chips -->
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                    <Border CornerRadius="14" Background="{DynamicResource ThemeAccent}" Padding="12,5" Margin="0,0,6,0">
+                        <TextBlock Foreground="{DynamicResource ThemeOnAccent}" FontWeight="SemiBold"><Run Text="All  "/><Run Text="{Binding TotalCount, Mode=OneWay}"/></TextBlock>
+                    </Border>
+                    <Border CornerRadius="14" Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}" BorderThickness="1" Padding="12,5" Margin="0,0,6,0">
+                        <TextBlock Foreground="{DynamicResource ThemeText}"><Run Text="Running  "/><Run Text="{Binding RunningCount, Mode=OneWay}"/></TextBlock>
+                    </Border>
+                    <Border CornerRadius="14" Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}" BorderThickness="1" Padding="12,5">
+                        <TextBlock Foreground="{DynamicResource ThemeText}"><Run Text="Stopped  "/><Run Text="{Binding StoppedCount, Mode=OneWay}"/></TextBlock>
+                    </Border>
+                </StackPanel>
+
+                <!-- VM list grouped by node (C) -->
+                <ItemsControl ItemsSource="{Binding Groups}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel>
+                                <DockPanel Margin="4,12,4,6">
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Summary}" FontSize="12" Foreground="{DynamicResource ThemeSubtext0}"/>
+                                    <TextBlock Text="{Binding Node}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}"/>
+                                </DockPanel>
+                                <ItemsControl ItemsSource="{Binding Vms}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border x:Name="Row" CornerRadius="6" Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}" BorderThickness="1" Padding="10,0" Margin="0,0,0,4" Height="44">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="42"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="118"/>
+                                                        <ColumnDefinition Width="46"/>
+                                                        <ColumnDefinition Width="86"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0" Width="32" Height="22" CornerRadius="4" Background="{DynamicResource ThemeSurface1}" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding OsBadge}" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ThemeText}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock x:Name="Name" Text="{Binding Name}" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}"/>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding Id}" FontSize="11" Foreground="{DynamicResource ThemeSubtext0}"/>
+                                                            <TextBlock x:Name="PoolText" FontSize="11" Foreground="{DynamicResource ThemeSubtext0}"><Run Text=" · "/><Run Text="{Binding Pool, Mode=OneWay}"/></TextBlock>
+                                                            <TextBlock x:Name="NoteText" FontSize="11" Foreground="{DynamicResource ThemeSubtext0}"><Run Text=" · "/><Run Text="{Binding Notes, Mode=OneWay}"/></TextBlock>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="2" Text="{Binding IpOrDash}" FontFamily="{StaticResource Mono}" FontSize="12" Foreground="{DynamicResource ThemeText}" VerticalAlignment="Center"/>
+                                                    <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <Path Style="{StaticResource Glyph}" Stroke="{DynamicResource ThemeOverlay1}" Data="M2.5,5 H5 L6.5,3 H9.5 L11,5 H13.5 V12.5 H2.5 Z M8,6.8 A2.2,2.2 0 1 0 8,11.2 A2.2,2.2 0 1 0 8,6.8"/>
+                                                        <TextBlock Text="{Binding Snaps}" Foreground="{DynamicResource ThemeSubtext0}" Margin="5,0,0,0"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <Ellipse x:Name="Dot" Width="8" Height="8" Fill="{DynamicResource ThemeGreen}"/>
+                                                        <TextBlock x:Name="State" Text="{Binding Status}" Foreground="{DynamicResource ThemeGreen}" Margin="7,0,0,0"/>
+                                                    </StackPanel>
+                                                    <Border x:Name="Connect" Grid.Column="5" Width="98" CornerRadius="6" Background="{DynamicResource ThemeAccent}" Padding="0,6" VerticalAlignment="Center">
+                                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                            <Path Data="M3,4 H13 V10 H3 Z M6,13 H10 M8,10 V13" Stroke="{DynamicResource ThemeOnAccent}" StrokeThickness="1.5" Width="16" Height="16" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                                            <TextBlock Text="Connect" Foreground="{DynamicResource ThemeOnAccent}" FontWeight="SemiBold" Margin="7,0,0,0"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                    <Border x:Name="StartBtn" Grid.Column="5" Width="98" CornerRadius="6" Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}" BorderThickness="1" Padding="0,6" VerticalAlignment="Center" Visibility="Collapsed">
+                                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                            <Path Style="{StaticResource Glyph}" Data="M5,3 L12.5,8 L5,13 Z"/>
+                                                            <TextBlock Text="Start" Foreground="{DynamicResource ThemeText}" Margin="7,0,0,0"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </Grid>
+                                            </Border>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding Running}" Value="False">
+                                                    <Setter TargetName="Dot" Property="Fill" Value="{DynamicResource ThemeOverlay0}"/>
+                                                    <Setter TargetName="State" Property="Foreground" Value="{DynamicResource ThemeOverlay1}"/>
+                                                    <Setter TargetName="Name" Property="Foreground" Value="{DynamicResource ThemeSubtext0}"/>
+                                                    <Setter TargetName="Connect" Property="Visibility" Value="Collapsed"/>
+                                                    <Setter TargetName="StartBtn" Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding HasNotes}" Value="False">
+                                                    <Setter TargetName="NoteText" Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding HasPool}" Value="False">
+                                                    <Setter TargetName="PoolText" Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Selected}" Value="True">
+                                                    <Setter TargetName="Row" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
+                                                    <Setter TargetName="Row" Property="BorderBrush" Value="{DynamicResource ThemeAccent}"/>
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </DockPanel>
+
+            <!-- Inspector for the selected VM (C), actions with their keys -->
+            <Border Grid.Column="1" Background="{DynamicResource ThemeMantle}" BorderBrush="{DynamicResource ThemeSurface0}" BorderThickness="1,0,0,0" CornerRadius="0,8,8,0" DataContext="{Binding SelectedVm}">
+                <DockPanel Margin="20,22,20,18">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Text="Selected" FontSize="12" Foreground="{DynamicResource ThemeSubtext0}"/>
+                        <TextBlock Text="{Binding Name}" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}" Margin="0,4,0,0"/>
+                        <TextBlock Foreground="{DynamicResource ThemeSubtext0}"><Run Text="{Binding OsLabel, Mode=OneWay}"/><Run Text=" · "/><Run Text="{Binding Status, Mode=OneWay}" Foreground="{DynamicResource ThemeGreen}"/></TextBlock>
+
+                        <Border CornerRadius="6" Background="{DynamicResource ThemeAccent}" Padding="14,9" Margin="0,16,0,0">
+                            <DockPanel>
+                                <Border DockPanel.Dock="Right" Style="{StaticResource Key}" BorderBrush="{DynamicResource ThemeOnAccent}"><TextBlock Text="Enter" Style="{StaticResource KeyText}" Foreground="{DynamicResource ThemeOnAccent}"/></Border>
+                                <Path Data="M3,4 H13 V10 H3 Z M6,13 H10 M8,10 V13" Stroke="{DynamicResource ThemeOnAccent}" StrokeThickness="1.5" Width="16" Height="16" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <TextBlock Text="Open SPICE console" Foreground="{DynamicResource ThemeOnAccent}" FontWeight="SemiBold" Margin="8,0,0,0"/>
+                            </DockPanel>
+                        </Border>
+
+                        <Grid Margin="0,18,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="VM ID" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/><TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Id}" Foreground="{DynamicResource ThemeText}"/>
+                            <TextBlock Grid.Row="1" Text="Address" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding IpOrDash}" FontFamily="{StaticResource Mono}" FontSize="12" Foreground="{DynamicResource ThemeText}"/>
+                            <TextBlock Grid.Row="2" Text="Node" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/><TextBlock Grid.Row="2" Grid.Column="1" Foreground="{DynamicResource ThemeText}"><Run Text="{Binding Node, Mode=OneWay}"/><Run Text=" · "/><Run Text="{Binding Pool, Mode=OneWay}"/></TextBlock>
+                            <TextBlock Grid.Row="3" Text="Notes" Foreground="{DynamicResource ThemeSubtext0}"/><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Notes}" Foreground="{DynamicResource ThemeText}" TextWrapping="Wrap"/>
+                        </Grid>
+
+                        <TextBlock Text="Actions" FontSize="12" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,22,0,8"/>
+                        <Button Style="{StaticResource CmdButton}" Margin="0,0,0,5"><DockPanel><Border DockPanel.Dock="Right" Style="{StaticResource Key}"><TextBlock Text="S" Style="{StaticResource KeyText}"/></Border><Path Style="{StaticResource Glyph}" Data="M5,3 L12.5,8 L5,13 Z"/><TextBlock Text="Start" Margin="8,0,0,0"/></DockPanel></Button>
+                        <Button Style="{StaticResource CmdButton}" Margin="0,0,0,5"><DockPanel><Border DockPanel.Dock="Right" Style="{StaticResource Key}"><TextBlock Text="Shift+S" Style="{StaticResource KeyText}"/></Border><Path Style="{StaticResource Glyph}" Data="M8,2 V7.5 M4.6,4.4 A5,5 0 1 0 11.4,4.4"/><TextBlock Text="Shut down" Margin="8,0,0,0"/></DockPanel></Button>
+                        <Button Style="{StaticResource CmdButton}" Margin="0,0,0,5"><DockPanel><Border DockPanel.Dock="Right" Style="{StaticResource Key}"><TextBlock Text="R" Style="{StaticResource KeyText}"/></Border><Path Style="{StaticResource Glyph}" Data="M13,8 A5,5 0 1 1 11.5,4.5 M11.5,1.8 V4.6 H8.7"/><TextBlock Text="Reboot" Margin="8,0,0,0"/></DockPanel></Button>
+                        <Button Style="{StaticResource CmdButton}" Margin="0,0,0,5"><DockPanel><Border DockPanel.Dock="Right" Style="{StaticResource Key}"><TextBlock Text="P" Style="{StaticResource KeyText}"/></Border><Path Style="{StaticResource Glyph}" Data="M2.5,5 H5 L6.5,3 H9.5 L11,5 H13.5 V12.5 H2.5 Z M8,6.8 A2.2,2.2 0 1 0 8,11.2 A2.2,2.2 0 1 0 8,6.8"/><TextBlock Text="Snapshots" Margin="8,0,0,0"/></DockPanel></Button>
+                    </StackPanel>
+                    <Button DockPanel.Dock="Bottom" VerticalAlignment="Bottom" Style="{StaticResource CmdButton}"><DockPanel><Border DockPanel.Dock="Right" Style="{StaticResource Key}" BorderBrush="{DynamicResource ThemeRed}"><TextBlock Text="Ctrl+." Style="{StaticResource KeyText}" Foreground="{DynamicResource ThemeRed}"/></Border><Path Style="{StaticResource Glyph}" Stroke="{DynamicResource ThemeRed}" Data="M4,4 H12 V12 H4 Z"/><TextBlock Text="Force stop" Margin="8,0,0,0" Foreground="{DynamicResource ThemeRed}"/></DockPanel></Button>
+                    <Border/>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Border>
+
+    <!-- Appearance flyout, opened from the quick switch in the sidebar footer -->
+    <Border Grid.ColumnSpan="2" Width="316" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="12,0,0,46"
+            Visibility="{Binding ShowAppearance, Converter={StaticResource Vis}}"
+            CornerRadius="8" Background="{DynamicResource ThemeMantle}" BorderBrush="{DynamicResource ThemeSurface1}" BorderThickness="1" Padding="14,14,14,12">
+        <Border.Effect><DropShadowEffect BlurRadius="24" ShadowDepth="6" Opacity="0.45" Color="Black"/></Border.Effect>
+        <StackPanel>
+            <TextBlock Text="Appearance" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}"/>
+
+            <TextBlock Text="Theme" FontSize="12" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,12,0,6"/>
+            <ItemsControl ItemsSource="{Binding ThemeChoices}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border x:Name="Row" CornerRadius="6" Padding="6,5" Margin="0,1">
+                            <DockPanel>
+                                <Path x:Name="Check" DockPanel.Dock="Right" Style="{StaticResource Glyph}" Stroke="{DynamicResource ThemeAccent}" StrokeThickness="1.8" Data="M3.5,8.5 L6.5,11.5 L12.5,4.5" Visibility="Hidden"/>
+                                <!-- Mini preview of the theme: page, card, text line, accent -->
+                                <Border Width="46" Height="28" CornerRadius="4" Background="{Binding Crust}" BorderBrush="{Binding Surface}" BorderThickness="1" ClipToBounds="True">
+                                    <Canvas>
+                                        <Border Canvas.Left="12" Canvas.Top="4" Width="30" Height="18" CornerRadius="2" Background="{Binding Base}"/>
+                                        <Border Canvas.Left="15" Canvas.Top="8" Width="16" Height="3" CornerRadius="1" Background="{Binding Text}"/>
+                                        <Border Canvas.Left="15" Canvas.Top="14" Width="10" Height="4" CornerRadius="1" Background="{Binding Accent}"/>
+                                        <Border Canvas.Left="3" Canvas.Top="5" Width="6" Height="2" Background="{Binding Surface}"/>
+                                        <Border Canvas.Left="3" Canvas.Top="9" Width="6" Height="2" Background="{Binding Surface}"/>
+                                    </Canvas>
+                                </Border>
+                                <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ThemeText}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            </DockPanel>
+                        </Border>
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding Selected}" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource ThemeSurface0}"/>
+                                <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <DockPanel Margin="0,14,0,8">
+                <TextBlock DockPanel.Dock="Right" Text="{Binding AccentName}" FontSize="12" Foreground="{DynamicResource ThemeSubtext0}"/>
+                <TextBlock Text="Accent" FontSize="12" Foreground="{DynamicResource ThemeSubtext0}"/>
+            </DockPanel>
+            <ItemsControl ItemsSource="{Binding AccentChoices}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Width="34" Height="34" Margin="0,0,5,0" ToolTip="{Binding Name}">
+                            <Ellipse x:Name="Ring" Width="32" Height="32" StrokeThickness="2" Stroke="{DynamicResource ThemeText}" Visibility="Hidden"/>
+                            <Ellipse Width="24" Height="24" Fill="{Binding Brush}"/>
+                        </Grid>
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding Selected}" Value="True">
+                                <Setter TargetName="Ring" Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <Border Height="1" Background="{DynamicResource ThemeSurface1}" Margin="0,12,0,8"/>
+            <TextBlock Text="More options in Settings" FontSize="12" Foreground="{DynamicResource ThemeSubtext0}"/>
+        </StackPanel>
+    </Border>
+</Grid>
