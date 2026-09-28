@@ -81,6 +81,9 @@ to the other where the platforms allow it.
   hour without asking (Proxmox accepts the current ticket in place of the
   password), and the password is asked again only if renewal fails. API
   token logins have no ticket and are unchanged.
+- Linux: when the system keyring couldn't store a token secret (no keyring
+  running, or a locked wallet), the cluster looked saved but couldn't log in
+  later. The app now says which cluster's secret wasn't saved and why.
 - Export files work across platforms. Both apps write the token secret as
   `token_secret` and read that, plus the older Windows exports that put the
   plaintext secret in `token_secret_enc`. A secret that is a DPAPI blob (from a

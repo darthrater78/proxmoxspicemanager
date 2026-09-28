@@ -1623,7 +1623,27 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         raise NotImplementedError
 
     def _platform_save_secret(self, cluster_name, secret):
+        """None once stored, else the reason it wasn't."""
         raise NotImplementedError
+
+    def _store_secrets(self, secrets):
+        """Save {cluster name: secret}; say which couldn't be saved instead of failing silently."""
+        failed = {}
+        for name, secret in secrets.items():
+            error = self._platform_save_secret(name, secret)
+            if error:
+                failed[name] = error
+        if failed:
+            details = "\n".join(f"{name}: {error}" for name, error in failed.items())
+            messagebox.showerror(
+                "Keyring",
+                "The token secret couldn't be saved in the system keyring:\n\n"
+                f"{details}\n\nThe cluster is saved without it, so it can't log in yet. Check "
+                "that a keyring (GNOME Keyring or KWallet) is running and unlocked, then edit "
+                "the cluster and enter the secret again.",
+                parent=self,
+            )
+        return not failed
 
     def _platform_delete_secret(self, cluster_name):
         raise NotImplementedError
@@ -2606,7 +2626,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             self.config_data.setdefault("clusters", []).append(dlg.result)
             self._save_config()
             if dlg._pending_secret:
-                self._platform_save_secret(dlg.result["name"], dlg._pending_secret)
+                self._store_secrets({dlg.result["name"]: dlg._pending_secret})
             self._select_cluster(len(self.config_data["clusters"]) - 1)
 
     def _edit_cluster(self):
@@ -2624,7 +2644,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             self.config_data["clusters"][idx] = dlg.result
             self._save_config()
             if dlg._pending_secret:
-                self._platform_save_secret(dlg.result["name"], dlg._pending_secret)
+                self._store_secrets({dlg.result["name"]: dlg._pending_secret})
             self._select_cluster(idx)
 
     def _remove_cluster(self):
@@ -2720,7 +2740,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             return
 
         existing = [c["name"] for c in self.config_data.get("clusters", [])]
-        need_secret = []
+        need_secret, secrets = [], {}
         for cluster in new_clusters:
             secret = cluster.pop("token_secret", None)
             enc = cluster.pop("token_secret_enc", None)
@@ -2730,13 +2750,14 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 cluster["name"] = f"{cluster['name']} (Imported)"
             self.config_data.setdefault("clusters", []).append(cluster)
             if secret:
-                self._platform_save_secret(cluster["name"], secret)
+                secrets[cluster["name"]] = secret
             elif cluster.get("auth_method") == "token":
                 need_secret.append(cluster["name"])
 
         self._save_config()
         self._populate_clusters()
         messagebox.showinfo("Imported", f"Imported {len(new_clusters)} cluster(s).", parent=self)
+        self._store_secrets(secrets)
         if need_secret:
             # An encrypted Windows secret (DPAPI) only opens for that Windows user
             messagebox.showwarning(
@@ -3477,13 +3498,14 @@ def check_deps():
 
 # ─── Keyring Secret Management ──────────────────────────────────────────────
 def save_secret(cluster_name, secret):
+    """None once stored, else why not: the keyring's error (it never contains the secret)."""
     try:
         import keyring
         keyring.set_password(APP_ID, cluster_name, secret)
-        return True
+        return None
     except Exception as e:
         print(f"[debug] save_secret failed: {type(e).__name__}", file=sys.stderr)
-        return False
+        return f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
 
 
 def get_secret(cluster_name):
@@ -3920,7 +3942,7 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
         return get_secret(cluster_name)
 
     def _platform_save_secret(self, cluster_name, secret):
-        save_secret(cluster_name, secret)
+        return save_secret(cluster_name, secret)
 
     def _platform_delete_secret(self, cluster_name):
         delete_secret(cluster_name)
