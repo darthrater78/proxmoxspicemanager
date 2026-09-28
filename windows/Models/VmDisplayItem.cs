@@ -16,11 +16,35 @@ public class VmDisplayItem : INotifyPropertyChanged
     // Proxmox "ostype" from the VM config: win11, win10, l26, ...
     public string OsType { get; set; } = "";
 
-    private string _ipAddress = "";
-    public string IpAddress
+    // Every address the guest agent reports, with the adapter it's live on
+    private IReadOnlyList<(string Adapter, string Ip)> _ips = [];
+    public IReadOnlyList<(string Adapter, string Ip)> Ips
     {
-        get => _ipAddress;
-        set { _ipAddress = value; OnPropertyChanged(); OnPropertyChanged(nameof(IpOrDash)); }
+        get => _ips;
+        set { _ips = value; RefreshAddress(); }
+    }
+
+    // Why there's no address: "", "no agent", "agent error"
+    private string _ipNote = "";
+    public string IpNote
+    {
+        get => _ipNote;
+        set { _ipNote = value; RefreshAddress(); }
+    }
+
+    // Set from the "show_ipv6" setting; IPv6 addresses are hidden unless it's on
+    public static bool ShowIpv6 { get; set; }
+    public IEnumerable<(string Adapter, string Ip)> ShownIps =>
+        Ips.Where(a => ShowIpv6 || !a.Ip.Contains(':'));
+
+    // First address, or why there is none; what the list sorts and searches by
+    public string IpAddress => ShownIps.Select(a => a.Ip).FirstOrDefault() ?? IpNote;
+
+    public void RefreshAddress()
+    {
+        OnPropertyChanged(nameof(IpAddress));
+        OnPropertyChanged(nameof(IpOrDash));
+        OnPropertyChanged(nameof(AdapterText));
     }
 
     private string _notes = "";
@@ -40,7 +64,16 @@ public class VmDisplayItem : INotifyPropertyChanged
     public string StatusText => Status.Length > 0
         ? CultureInfo.CurrentCulture.TextInfo.ToTitleCase(Status)
         : "Unknown";
-    public string IpOrDash => IpAddress.Length > 0 ? IpAddress : "—";
+    // The list cell: "10.20.30.41 +2" when the VM has more addresses
+    public string IpOrDash => ShownIps.Count() is var n and > 1
+        ? $"{IpAddress} +{n - 1}"
+        : IpAddress.Length > 0 ? IpAddress : "—";
+
+    // The inspector: addresses under the adapter they're on
+    public string AdapterText => ShownIps.Any()
+        ? string.Join("\n", ShownIps.GroupBy(a => a.Adapter.Length > 0 ? a.Adapter : "adapter")
+            .SelectMany(g => g.Select(a => "  " + a.Ip).Prepend(g.Key)))
+        : IpOrDash;
     public bool HasNotes => Notes.Length > 0;
     public bool HasPool => Pool.Length > 0;
     public string PoolOrDash => HasPool ? Pool : "—";

@@ -15,6 +15,15 @@
         <FontFamily x:Key="Mono">Cascadia Code, Consolas</FontFamily>
 
         <!-- Stroked 16px line icon -->
+        <Style x:Key="HeaderLink" TargetType="Hyperlink">
+            <Setter Property="Foreground" Value="{DynamicResource ThemeAccent}"/>
+            <Setter Property="TextDecorations" Value="{x:Null}"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="TextDecorations" Value="Underline"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="Glyph" TargetType="Path">
             <Setter Property="Stroke" Value="{DynamicResource ThemeSubtext1}"/>
             <Setter Property="StrokeThickness" Value="1.4"/>
@@ -229,6 +238,11 @@
                 <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
                     <TextBlock Text="SPICE Manager" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}"/>
                     <TextBlock x:Name="VersionText" Text="for Proxmox VE" FontSize="11" Foreground="{DynamicResource ThemeSubtext0}"/>
+                    <TextBlock FontSize="11" Foreground="{DynamicResource ThemeOverlay1}" Margin="0,2,0,0">
+                        <Hyperlink Style="{StaticResource HeaderLink}" Click="OnOpenGitHub" ToolTip="Project page on GitHub">GitHub</Hyperlink>
+                        <Run Text=" · "/>
+                        <Hyperlink x:Name="ReleaseNotesLink" Style="{StaticResource HeaderLink}" Click="OnOpenReleaseNotes">Release notes</Hyperlink>
+                    </TextBlock>
                 </StackPanel>
             </StackPanel>
 
@@ -400,15 +414,54 @@
                             </ListBox.ItemContainerStyle>
                             <ListBox.GroupStyle>
                                 <GroupStyle>
-                                    <GroupStyle.HeaderTemplate>
-                                        <DataTemplate>
-                                            <DockPanel Margin="4,12,4,6">
-                                                <TextBlock DockPanel.Dock="Right" Text="{Binding Items, Converter={StaticResource NodeSummary}}"
-                                                           FontSize="12" Foreground="{DynamicResource ThemeSubtext0}"/>
-                                                <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource ThemeSubtext1}"/>
-                                            </DockPanel>
-                                        </DataTemplate>
-                                    </GroupStyle.HeaderTemplate>
+                                    <!-- Node heading: a shaded band that folds its VMs away when clicked -->
+                                    <GroupStyle.ContainerStyle>
+                                        <Style TargetType="GroupItem">
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="GroupItem">
+                                                        <StackPanel>
+                                                            <ToggleButton x:Name="NodeHead" IsChecked="True" Focusable="False" Cursor="Hand" Margin="0,6,0,4"
+                                                                          Loaded="OnNodeHeaderLoaded" Checked="OnNodeHeaderToggled" Unchecked="OnNodeHeaderToggled"
+                                                                          ToolTip="Show or hide this node's VMs">
+                                                                <ToggleButton.Template>
+                                                                    <ControlTemplate TargetType="ToggleButton">
+                                                                        <Border x:Name="Bd" CornerRadius="6" Height="34" Background="{DynamicResource ThemeSurface1}">
+                                                                            <DockPanel>
+                                                                                <Border DockPanel.Dock="Left" Width="4" CornerRadius="6,0,0,6" Background="{DynamicResource ThemeAccent}"/>
+                                                                                <Path x:Name="Chevron" DockPanel.Dock="Left" Style="{StaticResource Glyph}" Data="{StaticResource IconChevron}"
+                                                                                      Stroke="{DynamicResource ThemeText}" Margin="8,0,6,0" RenderTransformOrigin="0.5,0.5"/>
+                                                                                <TextBlock DockPanel.Dock="Right" Margin="0,0,14,0" VerticalAlignment="Center" FontSize="12"
+                                                                                           Text="{Binding Items, Converter={StaticResource NodeSummary}}" Foreground="{DynamicResource ThemeSubtext1}"/>
+                                                                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center" FontSize="13" FontWeight="Bold"
+                                                                                           Foreground="{DynamicResource ThemeText}"/>
+                                                                            </DockPanel>
+                                                                        </Border>
+                                                                        <ControlTemplate.Triggers>
+                                                                            <Trigger Property="IsChecked" Value="False">
+                                                                                <Setter TargetName="Chevron" Property="RenderTransform">
+                                                                                    <Setter.Value><RotateTransform Angle="-90"/></Setter.Value>
+                                                                                </Setter>
+                                                                            </Trigger>
+                                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface2}"/>
+                                                                            </Trigger>
+                                                                        </ControlTemplate.Triggers>
+                                                                    </ControlTemplate>
+                                                                </ToggleButton.Template>
+                                                            </ToggleButton>
+                                                            <ItemsPresenter x:Name="Rows"/>
+                                                        </StackPanel>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger SourceName="NodeHead" Property="IsChecked" Value="False">
+                                                                <Setter TargetName="Rows" Property="Visibility" Value="Collapsed"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </GroupStyle.ContainerStyle>
                                 </GroupStyle>
                             </ListBox.GroupStyle>
                             <ListBox.ItemTemplate>
@@ -513,7 +566,7 @@
                                     <TextBlock Grid.Row="0" Text="VM ID" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>
                                     <TextBlock Grid.Row="0" Grid.Column="1" x:Name="DetailId" Foreground="{DynamicResource ThemeText}"/>
                                     <TextBlock Grid.Row="1" Text="Address" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>
-                                    <TextBlock Grid.Row="1" Grid.Column="1" x:Name="DetailIp" FontFamily="{StaticResource Mono}" FontSize="12" Foreground="{DynamicResource ThemeText}"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="1" x:Name="DetailIp" FontFamily="{StaticResource Mono}" FontSize="12" Foreground="{DynamicResource ThemeText}" Margin="0,0,0,7"/>
                                     <TextBlock Grid.Row="2" Text="Node" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>
                                     <TextBlock Grid.Row="2" Grid.Column="1" x:Name="DetailNode" Foreground="{DynamicResource ThemeText}"/>
                                     <TextBlock Grid.Row="3" Text="Pool" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>

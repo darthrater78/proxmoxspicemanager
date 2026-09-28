@@ -15,6 +15,7 @@ VERSION 3.0.0
 import copy
 import fcntl
 import importlib
+import ipaddress
 import json
 import logging
 import logging.handlers
@@ -38,6 +39,7 @@ from tkinter import ttk, messagebox, filedialog
 
 APP_ID = "proxmox-spice-manager"
 APP_VERSION = "3.0.0"
+REPO_URL = "https://github.com/darthrater78/proxmoxspicemanager"
 
 
 # ─── Debug Logger ────────────────────────────────────────────────────────────
@@ -915,22 +917,69 @@ SORT_LABELS = {
 }
 
 
-def _ip_key(ip):
-    """Numeric order for IPv4 addresses; anything else ("", "no agent") after them."""
-    parts = ip.split(".")
-    if len(parts) == 4 and all(p.isdigit() for p in parts):
-        return (0, tuple(int(p) for p in parts), "")
-    return (1, (), ip)
+def agent_has_agent(value):
+    """True when a VM config's `agent` value ("1", "enabled=1,fstrim_cloned_disks=1") turns it on."""
+    value = str(value or "")
+    return value.startswith("1") or "enabled=1" in value.split(",")
 
 
-def vm_sort_key(vm, column):
+def agent_ips(interfaces):
+    """(adapter, address) pairs live on the guest's adapters, from network-get-interfaces.
+
+    Loopback, link-local and unspecified addresses are left out. IPv4 comes first,
+    each family in adapter order.
+    """
+    found = []
+    for iface in interfaces or []:
+        adapter = str(iface.get("name", ""))
+        for addr in iface.get("ip-addresses") or []:
+            try:
+                ip = ipaddress.ip_address(str(addr.get("ip-address", "")).split("%")[0])
+            except ValueError:
+                continue
+            if not (ip.is_loopback or ip.is_link_local or ip.is_unspecified):
+                found.append((adapter, str(ip)))
+    return sorted(found, key=lambda a: ":" in a[1])
+
+
+def vm_ips(vm, ipv6):
+    """The VM's addresses to show: IPv6 only when that setting is on."""
+    return [(a, ip) for a, ip in vm.get("ips", []) if ipv6 or ":" not in ip]
+
+
+def vm_address(vm, ipv6):
+    """The list cell: the first address, "+N" for the rest, or why there is none."""
+    ips = vm_ips(vm, ipv6)
+    if not ips:
+        return vm.get("ip_note", "")
+    return ips[0][1] + (f" +{len(ips) - 1}" if len(ips) > 1 else "")
+
+
+def format_adapters(ips):
+    """Addresses grouped under their adapter, one per line, for the inspector."""
+    by_adapter = {}
+    for adapter, ip in ips:
+        by_adapter.setdefault(adapter or "adapter", []).append(f"  {ip}")
+    return "\n".join(line for adapter, addrs in by_adapter.items() for line in (adapter, *addrs))
+
+
+def _ip_key(vm, ipv6):
+    """Numeric order by first address, IPv4 before IPv6; no address ("no agent") after them."""
+    ips = vm_ips(vm, ipv6)
+    if ips:
+        ip = ipaddress.ip_address(ips[0][1])
+        return (0, ip.version, int(ip), "")
+    return (1, 0, 0, vm.get("ip_note", ""))
+
+
+def vm_sort_key(vm, column, ipv6=False):
     """The sort key for one column; blanks sort after values."""
     if column == "vmid":
         return vm["vmid"]
     if column == "snaps":
         return vm["snaps"]
     if column == "ip":
-        return _ip_key(vm["ip"])
+        return _ip_key(vm, ipv6)
     if column == "status":
         return (vm["status"] != "running", vm["status"])
     text = {"name": vm["name"], "node": vm["node"], "pool": vm["pool"],
@@ -1094,6 +1143,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             self._sort_col = "vmid"
         self._sort_desc = self.config_data.get("vm_sort_desc", False)
         self._collapsed_nodes = set()
+        self._show_ipv6 = bool(self.config_data.get("show_ipv6", False))
         self._cluster_idx = -1
         self._cluster_status = {}      # name -> (online, vm count)
         self._loaded_cluster = None
@@ -1148,6 +1198,12 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self.destroy()
 
     # ── Debug Logging ───────────────────────────────────────────────────────
+    def _toggle_ipv6(self):
+        self._show_ipv6 = not self._show_ipv6
+        self.config_data["show_ipv6"] = self._show_ipv6
+        self._save_config()
+        self._render_vms()
+
     def _toggle_debug_log(self):
         new_state = not DebugLogger.enabled
         DebugLogger.set_enabled(new_state)
@@ -1244,8 +1300,23 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         names.pack(side="left", padx=(10, 0))
         tk.Label(names, text="SPICE Manager", bg=C["crust"], fg=C["text"],
                  font=(FONT, 11, "bold")).pack(anchor="w")
-        tk.Label(names, text=f"for Proxmox VE · v{self._get_app_version()}",
+        version = self._get_app_version()
+        tk.Label(names, text=f"for Proxmox VE · v{version}",
                  bg=C["crust"], fg=C["subtext0"], font=(FONT, 8)).pack(anchor="w")
+        links = tk.Frame(names, bg=C["crust"])
+        links.pack(anchor="w", pady=(2, 0))
+        for i, (text, url) in enumerate((
+                ("GitHub", REPO_URL),
+                ("Release notes", f"{REPO_URL}/releases/tag/v{version}"))):
+            if i:
+                tk.Label(links, text=" · ", bg=C["crust"], fg=C["overlay1"],
+                         font=(FONT, 8)).pack(side="left")
+            link = tk.Label(links, text=text, bg=C["crust"], fg=C["accent"],
+                            font=(FONT, 8), cursor="hand2")
+            link.pack(side="left")
+            link.bind("<Button-1>", lambda e, u=url: webbrowser.open(u))
+            link.bind("<Enter>", lambda e: e.widget.config(font=(FONT, 8, "underline")))
+            link.bind("<Leave>", lambda e: e.widget.config(font=(FONT, 8)))
 
         bottom = tk.Frame(sidebar, bg=C["crust"])
         bottom.pack(side="bottom", fill="x", padx=(12, 8), pady=(0, 10))
@@ -1344,8 +1415,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             if col != "os":
                 tree.heading(col, anchor="w", command=lambda c=col: self._sort_by(c))
         # Node headings: a shaded band, so they read as sections, not as VMs
-        tree.tag_configure("group", foreground=C["text"], background=C["surface0"],
-                           font=(FONT, 10, "bold"))
+        tree.tag_configure("group", foreground=C["accent"], background=C["surface1"],
+                           font=(FONT, 11, "bold"))
         tree.tag_configure("running", foreground=C["text"])
         tree.tag_configure("stopped", foreground=C["overlay1"])
         scrollbar = ttk.Scrollbar(table, orient="vertical", command=tree.yview)
@@ -1419,8 +1490,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             return False
         if not query:
             return True
-        fields = (vm["name"], str(vm["vmid"]), vm["ip"], vm["node"], vm["pool"],
-                  vm["note"], os_label(vm["ostype"]))
+        fields = (vm["name"], str(vm["vmid"]), vm["node"], vm["pool"], vm["note"],
+                  os_label(vm["ostype"]), *(ip for _, ip in vm_ips(vm, self._show_ipv6)))
         return any(query in f.lower() for f in fields)
 
     def _render_vms(self, keep=None):
@@ -1432,9 +1503,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._iid_to_vm = {}
         query = self.search_var.get().strip().lower()
         visible = sorted((vm for vm in self._vms if self._vm_matches(vm, query)),
-                         key=lambda v: vm_sort_key(v, self._sort_col), reverse=self._sort_desc)
-        tree["displaycolumns"] = [c for c in tree["columns"]
-                                  if c != "node" or not self._group_by_node]
+                         key=lambda v: vm_sort_key(v, self._sort_col, self._show_ipv6), reverse=self._sort_desc)
         self._fit_columns()
         if self._group_by_node:
             for node in sorted({vm["node"] for vm in visible}):
@@ -1443,8 +1512,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 is_open = node not in self._collapsed_nodes
                 group = f"node:{node}"
                 tree.insert("", "end", iid=group, open=is_open, tags=("group",), values=(
-                    "", f"{'▾' if is_open else '▸'}  {node}", "", "", "", "", "",
-                    f"{running}/{len(vms)} running", ""))
+                    "", f"{'▾' if is_open else '▸'}  {node}  ·  {running}/{len(vms)} running",
+                    "", "", "", "", "", "", ""))
                 for vm in vms:
                     self._insert_vm(group, vm)
         else:
@@ -1464,9 +1533,12 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             self._empty_label.config(text=text)
             self._empty_label.place(relx=0.5, rely=0.4, anchor="center")
 
-        selection = [f"vm:{vmid}" for vmid in keep if f"vm:{vmid}" in self._iid_to_vm]
-        if not selection and self._iid_to_vm:
-            selection = [next(iter(self._iid_to_vm))]
+        # A VM inside a folded node stays unselected: see() would unfold it again,
+        # and keys shouldn't act on a VM that isn't on screen
+        shown = self._shown_vm_iids()
+        selection = [f"vm:{vmid}" for vmid in keep if f"vm:{vmid}" in shown]
+        if not selection and shown:
+            selection = shown[:1]
         if selection:
             tree.selection_set(selection)
             tree.focus(selection[0])
@@ -1479,23 +1551,32 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         status = "● Running" if is_running else f"○ {vm['status'].title() or 'Unknown'}"
         self.vm_tree.insert(parent, "end", iid=iid, tags=("running" if is_running else "stopped",),
                             values=(os_badge(vm["ostype"]), vm["name"], vm["vmid"],
-                                    vm["ip"] or "—", vm["node"], vm["pool"] or "—",
+                                    vm_address(vm, self._show_ipv6) or "—", vm["node"], vm["pool"] or "—",
                                     vm["snaps"], status, vm["note"]))
         self._iid_to_vm[iid] = vm
 
     # Name and notes share what the fixed columns leave; Tk won't shrink them itself
-    FIXED_WIDTHS = {"os": 40, "vmid": 48, "ip": 106, "node": 70, "pool": 78,
+    FIXED_WIDTHS = {"os": 40, "vmid": 48, "ip": 118, "node": 70, "pool": 78,
                     "snaps": 58, "status": 96}
+    # Dropped first when the list is too narrow, so status and notes stay on screen
+    OPTIONAL_COLUMNS = ("pool", "snaps", "node", "vmid", "ip")
+    MIN_NAME, MIN_NOTES = 110, 80
 
     def _fit_columns(self):
         tree = self.vm_tree
-        shown = tree["displaycolumns"]
-        if shown in ("#all", ("#all",)):
-            shown = tree["columns"]
-        spare = tree.winfo_width() - sum(self.FIXED_WIDTHS.get(c, 0) for c in shown) - 4
-        name = max(120, int(spare * 0.65))
+        shown = [c for c in tree["columns"] if c != "node" or not self._group_by_node]
+        width = tree.winfo_width() - 4
+        for col in self.OPTIONAL_COLUMNS:
+            fixed = sum(self.FIXED_WIDTHS.get(c, 0) for c in shown)
+            if fixed + self.MIN_NAME + self.MIN_NOTES <= width:
+                break
+            if col in shown and col != self._sort_col:
+                shown.remove(col)
+        tree["displaycolumns"] = shown
+        spare = width - sum(self.FIXED_WIDTHS.get(c, 0) for c in shown)
+        name = max(self.MIN_NAME, min(int(spare * 0.65), spare - self.MIN_NOTES))
         tree.column("name", width=name)
-        tree.column("notes", width=max(70, spare - name))
+        tree.column("notes", width=max(self.MIN_NOTES, spare - name))
 
     def _update_headings(self):
         for col, label in SORT_LABELS.items():
@@ -1535,13 +1616,24 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._render_vms()
         return "break"
 
+    def _shown_vm_iids(self):
+        """VM rows on screen, in list order: not inside a folded node heading."""
+        tree = self.vm_tree
+        return [iid for iid in self._iid_to_vm
+                if not tree.parent(iid) or tree.item(tree.parent(iid), "open")]
+
     def _focus_tree(self):
         tree = self.vm_tree
-        if not tree.selection() and self._iid_to_vm:
-            first = next(iter(self._iid_to_vm))
-            tree.selection_set(first)
-            tree.focus(first)
+        shown = self._shown_vm_iids()
+        if not tree.selection() and shown:
+            tree.selection_set(shown[0])
+            tree.focus(shown[0])
         tree.focus_set()
+
+    def _select_all_vms(self):
+        shown = self._shown_vm_iids()
+        if shown:
+            self.vm_tree.selection_set(shown)
 
     # ── Selection ────────────────────────────────────────────────────────────
     def _get_selected_vms(self):
@@ -1648,8 +1740,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         for row, (key, label) in enumerate((("vmid", "VM ID"), ("ip", "Address"),
                                             ("node", "Node"), ("pool", "Pool"))):
             tk.Label(details, text=label, bg=bg, fg=C["subtext0"], font=(FONT, 10),
-                     anchor="w").grid(row=row, column=0, sticky="w", pady=(0, 6))
-            value = tk.Label(details, bg=bg, fg=C["text"], anchor="w",
+                     anchor="w").grid(row=row, column=0, sticky="nw", pady=(0, 6))
+            value = tk.Label(details, bg=bg, fg=C["text"], anchor="w", justify="left",
                              font=(MONO, 9) if key == "ip" else (FONT, 10))
             value.grid(row=row, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
             self._detail[key] = value
@@ -1719,7 +1811,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                                     fg=C["green"] if is_running else C["overlay1"])
             self._console_btn.set_text("Open SPICE console")
             self._detail["vmid"].config(text=single["vmid"])
-            self._detail["ip"].config(text=single["ip"] or "—")
+            ips = vm_ips(single, self._show_ipv6)
+            self._detail["ip"].config(text=format_adapters(ips) or single["ip_note"] or "—")
             self._detail["node"].config(text=single["node"])
             self._detail["pool"].config(text=single["pool"] or "—")
             self._details.pack(fill="x", pady=(16, 0), after=self._console_btn)
@@ -1853,7 +1946,6 @@ class ProxmoxSpiceManagerBase(tk.Tk):
     def _open_settings(self):
         result = self._get_selected_cluster()
         name = result[1]["name"] if result else "cluster"
-        version = self._get_app_version()
         entries = [
             (f"Edit {name}…", self._edit_cluster, result is not None),
             (f"Remove {name}…", self._remove_cluster, result is not None),
@@ -1865,16 +1957,11 @@ class ProxmoxSpiceManagerBase(tk.Tk):
              self._toggle_debug_log),
             ("Open debug log", self._open_debug_log, DebugLogger.enabled),
             ("Check prerequisites", self._recheck_prereqs),
+            None,
+            ("IPv6 addresses: shown" if self._show_ipv6 else "IPv6 addresses: hidden",
+             self._toggle_ipv6),
         ]
         entries += self._platform_menu_entries()
-        entries += [
-            None,
-            ("GitHub", lambda: webbrowser.open(
-                "https://github.com/darthrater78/proxmoxspicemanager")),
-            (f"Release notes (v{version})", lambda: webbrowser.open(
-                "https://github.com/darthrater78/proxmoxspicemanager/releases/tag/"
-                f"v{version}")),
-        ]
         self._show_menu(self._settings_btn, entries)
 
     def _open_appearance(self):
@@ -1984,6 +2071,9 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         if ctrl:
             if key == "period":
                 self._stop_vm()
+                return "break"
+            if key in ("a", "A"):
+                self._select_all_vms()
                 return "break"
             return None
         action = actions.get(key)
@@ -2292,6 +2382,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 if "error" in config:
                     continue
                 vm["_ostype"] = str(config.get("data", {}).get("ostype", ""))
+                vm["_has_agent"] = agent_has_agent(config.get("data", {}).get("agent"))
                 vga = str(config.get("data", {}).get("vga", "")).lower()
                 if "qxl" in vga or "spice" in vga:
                     snap_data = api_request(
@@ -2307,25 +2398,18 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                     vm["_snap_count"] = len(
                         [s for s in snaps if s.get("name") != "current"]
                     )
-                    ip_addr = ""
-                    if vm.get("status") == "running":
+                    vm["_ips"], vm["_ip_note"] = [], "" if vm["_has_agent"] else "no agent"
+                    if vm.get("status") == "running" and vm["_has_agent"]:
                         agent_data = api_request(
                             cluster["host"],
                             f"/api2/json/nodes/{vm.get('node')}"
                             f"/qemu/{vm.get('vmid')}/agent/network-get-interfaces",
                             auth=auth,
                         )
-                        if "error" not in agent_data:
-                            for iface in agent_data.get("data", {}).get("result", []):
-                                if iface.get("name") == "lo":
-                                    continue
-                                for addr in iface.get("ip-addresses", []):
-                                    if addr.get("ip-address-type") == "ipv4":
-                                        ip_addr = addr.get("ip-address", "")
-                                        break
-                                if ip_addr:
-                                    break
-                    vm["_ip_address"] = ip_addr
+                        if "error" in agent_data:
+                            vm["_ip_note"] = "agent error"
+                        else:
+                            vm["_ips"] = agent_ips(agent_data.get("data", {}).get("result"))
                     spice_vms.append(vm)
 
             self.after(0, lambda: update_ui(spice_vms, len(qemu_vms)))
@@ -2341,7 +2425,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 "pool": vm.get("pool", ""),
                 "snaps": vm.get("_snap_count", 0),
                 "status": vm.get("status", ""),
-                "ip": vm.get("_ip_address", ""),
+                "ips": vm.get("_ips", []),
+                "ip_note": vm.get("_ip_note", ""),
                 "ostype": vm.get("_ostype", ""),
                 "note": self._lookup_vm_note(vm.get("vmid", "")),
             } for vm in spice_vms]

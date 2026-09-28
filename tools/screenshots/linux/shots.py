@@ -37,7 +37,9 @@ psm.save_config({
 })
 
 VMS = [
-    (101, "win11-dev", "pve1", "desktops", 3, "running", "10.20.30.41", "win11"),
+    (101, "win11-dev", "pve1", "desktops", 3, "running",
+     [("Ethernet", "10.20.30.41"), ("Ethernet", "2001:db8:20::41"), ("Ethernet 2", "192.168.50.41")],
+     "win11"),
     (102, "fedora-43-ws", "pve1", "desktops", 1, "running", "10.20.30.42", "l26"),
     (103, "ubuntu-2404-desk", "pve2", "desktops", 0, "stopped", "", "l26"),
     (110, "kali-lab", "pve2", "security", 5, "running", "no agent", "l26"),
@@ -57,7 +59,10 @@ class Shots(psm.ProxmoxSpiceManager):
         keep = {vm["vmid"] for vm in self._get_selected_vms()}
         self._vms = [
             {"vmid": vmid, "name": name, "node": node, "pool": pool, "snaps": snaps,
-             "status": status, "ip": ip, "ostype": ostype,
+             "status": status, "ostype": ostype,
+             # A string stands for why there's no address ("", "no agent")
+             "ips": ip if isinstance(ip, list) else [("eth0", ip)] if ip[:1].isdigit() else [],
+             "ip_note": "" if isinstance(ip, list) or ip[:1].isdigit() else ip,
              "note": self._lookup_vm_note(vmid)}
             for vmid, name, node, pool, snaps, status, ip, ostype in VMS
         ]

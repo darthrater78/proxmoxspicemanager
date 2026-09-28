@@ -143,6 +143,15 @@ static class Program
         config.VmSort = "vmid";
         group.IsChecked = true;
         Call(w, "ApplySortAndGrouping");
+
+        // Regrouping rebuilds the headings, which read their folded state back
+        var collapsed = Get<HashSet<string>>(w, "_collapsedNodes");
+        collapsed.Add("pve3");
+        Call(w, "ApplySortAndGrouping");
+        Pump(400);
+        Capture(w, Path.Combine(outDir, "windows-state-collapsed.png"));
+        collapsed.Clear();
+        Call(w, "ApplySortAndGrouping");
         Log("states captured");
     }
 
@@ -178,14 +187,14 @@ static class Program
 
     static readonly VmDisplayItem[] MockVms =
     [
-        new() { VmId = 101, Name = "win11-dev", Node = "pve1", Pool = "desktops", SnapCount = 3, Status = "running", HasAgent = true, IpAddress = "10.20.30.41", OsType = "win11", Notes = "Daily driver" },
-        new() { VmId = 102, Name = "fedora-43-ws", Node = "pve1", Pool = "desktops", SnapCount = 1, Status = "running", HasAgent = true, IpAddress = "10.20.30.42", OsType = "l26", Notes = "" },
-        new() { VmId = 103, Name = "ubuntu-2404-desk", Node = "pve2", Pool = "desktops", SnapCount = 0, Status = "stopped", HasAgent = true, IpAddress = "", OsType = "l26", Notes = "" },
-        new() { VmId = 110, Name = "kali-lab", Node = "pve2", Pool = "security", SnapCount = 5, Status = "running", HasAgent = false, IpAddress = "no agent", OsType = "l26", Notes = "Testing" },
-        new() { VmId = 120, Name = "win-server-2025", Node = "pve1", Pool = "servers", SnapCount = 2, Status = "running", HasAgent = true, IpAddress = "10.20.30.60", OsType = "win11", Notes = "Domain controller" },
-        new() { VmId = 121, Name = "debian-13-build", Node = "pve3", Pool = "servers", SnapCount = 0, Status = "stopped", HasAgent = true, IpAddress = "", OsType = "l26", Notes = "" },
-        new() { VmId = 130, Name = "win10-legacy", Node = "pve3", Pool = "desktops", SnapCount = 1, Status = "stopped", HasAgent = true, IpAddress = "", OsType = "win10", Notes = "Keep for old apps" },
-        new() { VmId = 140, Name = "arch-sandbox", Node = "pve2", Pool = "", SnapCount = 4, Status = "running", HasAgent = true, IpAddress = "10.20.30.75", OsType = "l26", Notes = "" },
+        new() { VmId = 101, Name = "win11-dev", Node = "pve1", Pool = "desktops", SnapCount = 3, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.41"), ("Ethernet", "2001:db8:20::41"), ("Ethernet 2", "192.168.50.41")], OsType = "win11", Notes = "Daily driver" },
+        new() { VmId = 102, Name = "fedora-43-ws", Node = "pve1", Pool = "desktops", SnapCount = 1, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.42")], OsType = "l26", Notes = "" },
+        new() { VmId = 103, Name = "ubuntu-2404-desk", Node = "pve2", Pool = "desktops", SnapCount = 0, Status = "stopped", HasAgent = true, IpNote = "", OsType = "l26", Notes = "" },
+        new() { VmId = 110, Name = "kali-lab", Node = "pve2", Pool = "security", SnapCount = 5, Status = "running", HasAgent = false, IpNote = "no agent", OsType = "l26", Notes = "Testing" },
+        new() { VmId = 120, Name = "win-server-2025", Node = "pve1", Pool = "servers", SnapCount = 2, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.60")], OsType = "win11", Notes = "Domain controller" },
+        new() { VmId = 121, Name = "debian-13-build", Node = "pve3", Pool = "servers", SnapCount = 0, Status = "stopped", HasAgent = true, IpNote = "", OsType = "l26", Notes = "" },
+        new() { VmId = 130, Name = "win10-legacy", Node = "pve3", Pool = "desktops", SnapCount = 1, Status = "stopped", HasAgent = true, IpNote = "", OsType = "win10", Notes = "Keep for old apps" },
+        new() { VmId = 140, Name = "arch-sandbox", Node = "pve2", Pool = "", SnapCount = 4, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.75")], OsType = "l26", Notes = "" },
     ];
 
     // Design prototypes: loose XAML files (no code-behind) bound to ProposalData

@@ -23,6 +23,8 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, AuthInfo> _authCache = new();
     private ObservableCollection<VmDisplayItem> _vmItems = [];
     private ICollectionView? _vmView;
+    // Node headings folded away; kept across refreshes and regrouping
+    private readonly HashSet<string> _collapsedNodes = new();
     private string? _loadedClusterName;
 
     // Single source of truth for the version is <Version> in the csproj.
@@ -34,6 +36,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         Title = $"Proxmox SPICE Manager v{AppVersion}";
         VersionText.Text = $"for Proxmox VE · v{AppVersion}";
+        ReleaseNotesLink.ToolTip = $"What's new in v{AppVersion}";
         _config = ConfigService.Load();
         _config.NoteOptions ??= [];
         _config.VmNotes ??= new Dictionary<string, string>();
@@ -44,6 +47,7 @@ public partial class MainWindow : Window
         _vmView.Filter = VmFilterPredicate;
         if (!VmComparer.Labels.ContainsKey(_config.VmSort)) _config.VmSort = "vmid";
         GroupToggle.IsChecked = _config.GroupByNode;
+        VmDisplayItem.ShowIpv6 = _config.ShowIpv6;
         ApplySortAndGrouping();
 
         RefreshClusterList();
@@ -364,8 +368,7 @@ public partial class MainWindow : Window
                         if (prop.Name.StartsWith("vga") &&
                             prop.Value.GetString()?.Contains("qxl") == true)
                             hasSpice = true;
-                        if (prop.Name == "agent" &&
-                            prop.Value.GetString()?.StartsWith("1") == true)
+                        if (prop.Name == "agent" && AgentEnabled(prop.Value.ToString()))
                             hasAgent = true;
                         if (prop.Name == "ostype")
                             osType = prop.Value.GetString() ?? "";
@@ -409,7 +412,7 @@ public partial class MainWindow : Window
                     SnapCount = snapCount,
                     HasAgent = e.hasAgent,
                     OsType = e.osType,
-                    IpAddress = e.hasAgent ? "" : "no agent",
+                    IpNote = e.hasAgent ? "" : "no agent",
                     Notes = LookupVmNote(e.vmid) ?? "",
                 });
             }
@@ -445,13 +448,12 @@ public partial class MainWindow : Window
                         {
                             if (ipJson == null)
                             {
-                                capturedVm.IpAddress = "agent error";
+                                capturedVm.IpNote = "agent error";
                                 Interlocked.Increment(ref errorCount);
                             }
                             else
                             {
-                                var ip = ParseIpAddress(ipJson);
-                                capturedVm.IpAddress = ip.Length > 0 ? ip : "";
+                                capturedVm.Ips = ParseAgentIps(ipJson);
                             }
                         });
                     }
@@ -461,7 +463,7 @@ public partial class MainWindow : Window
                         Interlocked.Increment(ref errorCount);
                         await Dispatcher.InvokeAsync(() =>
                         {
-                            capturedVm.IpAddress = "agent error";
+                            capturedVm.IpNote = "agent error";
                         });
                     }
                 })).ToList();
@@ -485,31 +487,42 @@ public partial class MainWindow : Window
         }
     }
 
-    private static string ParseIpAddress(JsonElement? ipJson)
+    // "1" or "enabled=1,fstrim_cloned_disks=1" in a VM config's agent option
+    private static bool AgentEnabled(string value) =>
+        value.StartsWith('1') || value.Split(',').Contains("enabled=1");
+
+    // Addresses live on the guest's adapters: loopback, link-local and unspecified
+    // left out, IPv4 first, each family in adapter order
+    private static List<(string Adapter, string Ip)> ParseAgentIps(JsonElement? ipJson)
     {
+        var found = new List<(string Adapter, string Ip)>();
         if (ipJson?.TryGetProperty("data", out var agentData) != true ||
-            !agentData.TryGetProperty("result", out var ifaces))
-            return "";
+            !agentData.TryGetProperty("result", out var ifaces) ||
+            ifaces.ValueKind != JsonValueKind.Array)
+            return found;
 
         foreach (var iface in ifaces.EnumerateArray())
         {
-            var ifName = iface.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-            if (ifName == "lo") continue;
-            if (iface.TryGetProperty("ip-addresses", out var addrs))
+            var adapter = iface.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+            if (!iface.TryGetProperty("ip-addresses", out var addrs) || addrs.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var addr in addrs.EnumerateArray())
             {
-                foreach (var addr in addrs.EnumerateArray())
-                {
-                    if (addr.TryGetProperty("ip-address-type", out var t) &&
-                        t.GetString() == "ipv4" &&
-                        addr.TryGetProperty("ip-address", out var ip))
-                    {
-                        return ip.GetString() ?? "";
-                    }
-                }
+                if (!addr.TryGetProperty("ip-address", out var ipEl) ||
+                    !System.Net.IPAddress.TryParse((ipEl.GetString() ?? "").Split('%')[0], out var ip))
+                    continue;
+                if (System.Net.IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || IsIpv4LinkLocal(ip) ||
+                    ip.Equals(System.Net.IPAddress.Any) || ip.Equals(System.Net.IPAddress.IPv6Any))
+                    continue;
+                found.Add((adapter, ip.ToString()));
             }
         }
-        return "";
+        return found.OrderBy(a => a.Ip.Contains(':')).ToList();
     }
+
+    private static bool IsIpv4LinkLocal(System.Net.IPAddress ip) =>
+        ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+        ip.GetAddressBytes() is [169, 254, ..];
 
     private void OnRefresh(object sender, RoutedEventArgs e) => _ = RefreshVmsAsync();
 
@@ -522,11 +535,11 @@ public partial class MainWindow : Window
         if (keepSelected is { Count: > 0 })
         {
             foreach (var vm in _vmView?.OfType<VmDisplayItem>() ?? [])
-                if (keepSelected.Contains(vm.VmId))
+                if (keepSelected.Contains(vm.VmId) && IsShown(vm))
                     VmList.SelectedItems.Add(vm);
         }
         if (VmList.SelectedItems.Count == 0)
-            VmList.SelectedItem = _vmView?.OfType<VmDisplayItem>().FirstOrDefault();
+            VmList.SelectedItem = _vmView?.OfType<VmDisplayItem>().FirstOrDefault(IsShown);
     }
 
     private string ClusterSummary()
@@ -550,8 +563,8 @@ public partial class MainWindow : Window
         FilterRunning.Content = $"Running  {running}";
         FilterStopped.Content = $"Stopped  {_vmItems.Count - running}";
         _vmView?.Refresh();
-        var first = _vmView?.OfType<VmDisplayItem>().FirstOrDefault();
-        var visible = first != null;
+        var visible = _vmView?.OfType<VmDisplayItem>().Any() == true;
+        var first = _vmView?.OfType<VmDisplayItem>().FirstOrDefault(IsShown);
         // Keep something selected (the top match after a search), so Enter always has a target
         if (first != null && VmList.SelectedItems.Count == 0)
             VmList.SelectedItem = first;
@@ -569,7 +582,8 @@ public partial class MainWindow : Window
 
         var q = SearchBox.Text.Trim();
         if (q.Length == 0) return true;
-        return new[] { vm.Name, vm.VmId.ToString(), vm.IpAddress, vm.Node, vm.Pool, vm.Notes, vm.OsLabel }
+        return new[] { vm.Name, vm.VmId.ToString(), vm.Node, vm.Pool, vm.Notes, vm.OsLabel }
+            .Concat(vm.ShownIps.Select(a => a.Ip))
             .Any(f => f.Contains(q, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -595,9 +609,36 @@ public partial class MainWindow : Window
         VmDisplayItem.ShowNode = !grouped;
         foreach (var vm in _vmItems) vm.RefreshDetail();
         SortText.Text = $"Sort: {VmComparer.Labels[_config.VmSort]} {(_config.VmSortDesc ? "▼" : "▲")}";
-        foreach (var vm in keep)
+        foreach (var vm in keep.Where(IsShown))
             if (!VmList.SelectedItems.Contains(vm)) VmList.SelectedItems.Add(vm);
         if (VmList.SelectedItem != null) VmList.ScrollIntoView(VmList.SelectedItem);
+    }
+
+    // A VM inside a folded node is off screen, so keys shouldn't act on it
+    private bool IsShown(VmDisplayItem vm) => !_config.GroupByNode || !_collapsedNodes.Contains(vm.Node);
+
+    // Regrouping rebuilds the headings: restore each one's folded state
+    private void OnNodeHeaderLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton { DataContext: CollectionViewGroup group } head)
+            head.IsChecked = !_collapsedNodes.Contains(group.Name?.ToString() ?? "");
+    }
+
+    private void OnNodeHeaderToggled(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton { DataContext: CollectionViewGroup group } head) return;
+        var node = group.Name?.ToString() ?? "";
+        if (head.IsChecked == true)
+        {
+            _collapsedNodes.Remove(node);
+            return;
+        }
+        if (!_collapsedNodes.Add(node)) return;
+        foreach (var vm in VmList.SelectedItems.OfType<VmDisplayItem>().Where(v => v.Node == node).ToList())
+            VmList.SelectedItems.Remove(vm);
+        if (VmList.SelectedItems.Count == 0 &&
+            _vmView?.OfType<VmDisplayItem>().FirstOrDefault(IsShown) is { } first)
+            VmList.SelectedItem = first;
     }
 
     private void OnGroupToggle(object sender, RoutedEventArgs e)
@@ -691,6 +732,12 @@ public partial class MainWindow : Window
             case Key.OemPeriod when mods == ModifierKeys.Control:
                 OnForceStopVm(this, e);
                 break;
+            case Key.A when mods == ModifierKeys.Control:
+                // Only what's on screen, not the VMs inside folded nodes
+                VmList.SelectedItems.Clear();
+                foreach (var vm in _vmView?.OfType<VmDisplayItem>().Where(IsShown) ?? [])
+                    VmList.SelectedItems.Add(vm);
+                break;
             default:
                 return;
         }
@@ -700,7 +747,7 @@ public partial class MainWindow : Window
     private void FocusList()
     {
         if (VmList.SelectedItem == null)
-            VmList.SelectedItem = _vmView?.OfType<VmDisplayItem>().FirstOrDefault();
+            VmList.SelectedItem = _vmView?.OfType<VmDisplayItem>().FirstOrDefault(IsShown);
         if (VmList.SelectedItem != null &&
             VmList.ItemContainerGenerator.ContainerFromItem(VmList.SelectedItem) is ListBoxItem item)
             item.Focus();
@@ -745,7 +792,7 @@ public partial class MainWindow : Window
             InspectorState.SetResourceReference(TextElement.ForegroundProperty, single.IsRunning ? "ThemeGreen" : "ThemeOverlay1");
             OpenConsoleText.Text = "Open SPICE console";
             DetailId.Text = single.VmId.ToString();
-            DetailIp.Text = single.IpOrDash;
+            DetailIp.Text = single.AdapterText;
             DetailNode.Text = single.Node;
             DetailPool.Text = single.PoolOrDash;
             NotesBox.Text = single.Notes;
@@ -1011,10 +1058,16 @@ public partial class MainWindow : Window
             new("Check prerequisites", CheckPrereqs),
             new("Create Start Menu shortcut", CreateShortcut),
             null,
-            new("GitHub", () => OpenUrl("https://github.com/darthrater78/proxmoxspicemanager")),
-            new($"Release notes (v{AppVersion})", () => OpenUrl($"https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v{AppVersion}")),
+            new(_config.ShowIpv6 ? "IPv6 addresses: shown" : "IPv6 addresses: hidden", ToggleIpv6),
         ]);
     }
+
+    private const string RepoUrl = "https://github.com/darthrater78/proxmoxspicemanager";
+
+    private void OnOpenGitHub(object sender, RoutedEventArgs e) => OpenUrl(RepoUrl);
+
+    private void OnOpenReleaseNotes(object sender, RoutedEventArgs e) =>
+        OpenUrl($"{RepoUrl}/releases/tag/v{AppVersion}");
 
     private record MenuEntry(string Label, Action Run, bool Enabled = true);
 
@@ -1155,6 +1208,17 @@ public partial class MainWindow : Window
     }
 
     // ── Debug Logging ─────────────────────────────────────────────────────
+    private void ToggleIpv6()
+    {
+        _config.ShowIpv6 = !_config.ShowIpv6;
+        VmDisplayItem.ShowIpv6 = _config.ShowIpv6;
+        SaveConfig();
+        foreach (var vm in _vmItems) vm.RefreshAddress();
+        UpdateListState();
+        ApplySortAndGrouping();
+        UpdateInspector();
+    }
+
     private void ToggleDebugLog()
     {
         bool newState = !DebugLogger.Enabled;

@@ -43,12 +43,15 @@ public class VmComparer(string key, bool descending, bool byNodeFirst) : ICompar
         (a.Length == 0).CompareTo(b.Length == 0) is var blank and not 0
             ? blank : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
 
-    // IPv4 in numeric order; "", "no agent" and the like after every address
-    private static (int, uint, string) Ip(string ip) =>
-        System.Net.IPAddress.TryParse(ip, out var addr) &&
-        addr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
-            ? (0, (uint)System.Net.IPAddress.NetworkToHostOrder(BitConverter.ToInt32(addr.GetAddressBytes())), "")
-            : (1, 0u, ip);
+    // Numeric order, IPv4 before IPv6; "", "no agent" and the like after every address
+    private static (int, int, UInt128, string) Ip(string ip)
+    {
+        if (!System.Net.IPAddress.TryParse(ip, out var addr)) return (1, 0, 0, ip);
+        var bytes = new byte[16];
+        var raw = addr.GetAddressBytes();
+        raw.CopyTo(bytes, 16 - raw.Length);
+        return (0, raw.Length, System.Buffers.Binary.BinaryPrimitives.ReadUInt128BigEndian(bytes), "");
+    }
 }
 
 // A node group's items to "2/3 running"

@@ -26,6 +26,10 @@ public class AppConfig
     [JsonPropertyName("vm_sort_desc")]
     public bool VmSortDesc { get; set; }
 
+    // Shared with the Linux app; IPv6 addresses stay hidden unless it's on
+    [JsonPropertyName("show_ipv6")]
+    public bool ShowIpv6 { get; set; }
+
     [JsonPropertyName("column_order")]
     public List<string>? ColumnOrder { get; set; }
 

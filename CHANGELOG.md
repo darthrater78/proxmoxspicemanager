@@ -86,10 +86,25 @@ to the other where the platforms allow it.
 
 ### Added
 
+- Both apps show every address the guest agent reports, grouped by adapter in
+  the details panel; the list shows the first one and "+N" for the rest.
+  Loopback and link-local addresses are left out. IPv6 addresses are hidden
+  unless Settings → "IPv6 addresses" is switched on (`show_ipv6`, shared by
+  both apps).
+- Windows: node headings are a shaded band that folds its VMs away when
+  clicked, like on Linux.
+- GitHub and Release notes links in the app header, moved out of Settings.
+- Linux: Ctrl+A selects every VM on screen, as on Windows.
 - MIT `LICENSE` file (the README already stated MIT).
 
 ### Fixed
 
+- Linux: a node heading could not be folded while it held the selected VM.
+- Linux: in narrow windows the Status and Notes columns were cut off the
+  right edge. The least-needed columns (Pool, Snaps, Node, ID, Address) now
+  make way instead, never the one the list is sorted by.
+- A guest agent enabled as `enabled=1,…` in the VM config was not detected.
+  Linux now also shows "no agent" and "agent error" like Windows.
 - Linux: when launching a SPICE session failed, the error dialog never
   appeared (the handler raised `NameError`). It now shows the error.
 
