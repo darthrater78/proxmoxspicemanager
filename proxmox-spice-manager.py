@@ -331,6 +331,25 @@ def authenticate_password(host, username, password, pin=None):
     return None
 
 
+def wait_for_task(host, auth, upid, timeout=180):
+    """Block until the Proxmox task a POST started (its UPID) ends: None once it ended well,
+    else why not. Start, shutdown, snapshots etc. run as tasks, so the POST returns first."""
+    if not isinstance(upid, str) or not upid.startswith("UPID:"):
+        return None  # nothing to wait for
+    node = upid.split(":")[1]
+    path = (f"/api2/json/nodes/{urllib.parse.quote(node, safe='')}"
+            f"/tasks/{urllib.parse.quote(upid, safe='')}/status")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        task = api_request(host, path, auth=auth).get("data") or {}
+        if task.get("status") == "stopped":
+            exit_status = task.get("exitstatus", "")
+            return None if exit_status == "OK" or exit_status.startswith("WARNINGS") \
+                else exit_status or "task failed"
+        time.sleep(1)
+    return "still running after 3 minutes"
+
+
 def write_vv_file(spice_data):
     """A remote-viewer connection file from Proxmox's spiceproxy answer; returns its path.
     Created private (0600); remote-viewer deletes it once read (delete-this-file)."""
@@ -648,7 +667,6 @@ class SnapshotDialog(tk.Toplevel):
         self.cluster = cluster
         self.auth = auth
         self.on_change = on_change
-        self._initial_count = 0
 
         self.title(f"Snapshots — {vm['name']} (VM {vm['vmid']})")
         self.geometry("620x480")
@@ -772,7 +790,6 @@ class SnapshotDialog(tk.Toplevel):
         ]
 
         if not real_snaps:
-            self._initial_count = 0
             self.status_label.config(text="No snapshots found.", fg=C["overlay0"])
             return
 
@@ -790,12 +807,32 @@ class SnapshotDialog(tk.Toplevel):
             self.snap_tree.insert("", "end", values=(name, date_str, desc))
             count += 1
 
-        self._initial_count = count
         self.status_label.config(text=f"{count} snapshot(s)", fg=C["overlay0"])
 
-    def _notify_change(self):
-        if self.on_change:
-            self.on_change(self.vm["vmid"], self.vm["node"], self._initial_count)
+    def _finish_task(self, data, what, done):
+        """Wait in the background for the task Proxmox started, then show how it ended,
+        reload the list and let the main window refresh (on_change)."""
+        self.status_label.config(text=f"{what}: waiting for Proxmox...", fg=C["yellow"])
+        app = self.master
+
+        def run():
+            error = wait_for_task(self.cluster["host"], self.auth, data.get("data"))
+            if not app._closing:
+                app.after(0, lambda: finish(error))
+
+        def finish(error):
+            if self.on_change:
+                self.on_change()
+            if not self.winfo_exists():
+                return  # closed meanwhile
+            self._load_snapshots()
+            if error:
+                self.status_label.config(text=f"{what} failed", fg=C["red"])
+                messagebox.showerror(f"{what} Failed", error, parent=self)
+            else:
+                self.status_label.config(text=done, fg=C["green"])
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _get_selected_snapshot(self):
         sel = self.snap_tree.selection()
@@ -836,14 +873,7 @@ class SnapshotDialog(tk.Toplevel):
             self.status_label.config(text="Rollback failed", fg=C["red"])
             messagebox.showerror("Rollback Failed", data["error"], parent=self)
         else:
-            self.status_label.config(
-                text=f"Rolled back to '{snap_name}'", fg=C["green"]
-            )
-            if hasattr(self.master, "_poll_until_changed"):
-                self.master._poll_until_changed(
-                    {str(self.vm["vmid"]): "stopped"}, auth=self.auth
-                )
-            self.after(3000, self._load_snapshots)
+            self._finish_task(data, "Rollback", f"Rolled back to '{snap_name}'")
 
     def _create_snapshot(self):
         dlg = tk.Toplevel(self)
@@ -939,11 +969,7 @@ class SnapshotDialog(tk.Toplevel):
             self.status_label.config(text="Snapshot creation failed", fg=C["red"])
             messagebox.showerror("Snapshot Failed", data["error"], parent=self)
         else:
-            self.status_label.config(
-                text=f"Snapshot '{result['name']}' created", fg=C["green"]
-            )
-            self._notify_change()
-            self.after(3000, self._load_snapshots)
+            self._finish_task(data, "Snapshot", f"Snapshot '{result['name']}' created")
 
     def _delete_snapshot(self):
         snap_name = self._get_selected_snapshot()
@@ -971,11 +997,7 @@ class SnapshotDialog(tk.Toplevel):
             self.status_label.config(text="Delete failed", fg=C["red"])
             messagebox.showerror("Delete Failed", data["error"], parent=self)
         else:
-            self.status_label.config(
-                text=f"Snapshot '{snap_name}' deleted", fg=C["green"]
-            )
-            self._notify_change()
-            self.after(3000, self._load_snapshots)
+            self._finish_task(data, "Delete", f"Snapshot '{snap_name}' deleted")
 
 
 # ─── Base Application ────────────────────────────────────────────────────────
@@ -3231,10 +3253,9 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             return
 
         self.status_label.config(text=f"{action_label} {len(valid)} VM(s)...", fg=C["yellow"])
-        poll_auth = auth
 
         def do_action():
-            errors = []
+            errors, tasks = [], []
             for vm in valid:
                 data = api_request(
                     cluster["host"],
@@ -3244,11 +3265,13 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 err = data.get("error")
                 if err and "already" not in str(err).lower():
                     errors.append(f"{vm['name']}: {err}")
-
-            expected = {
-                str(vm["vmid"]): ("running" if action in ("start", "reboot") else "stopped")
-                for vm in valid
-            }
+                elif not err:
+                    tasks.append((vm, data.get("data")))
+            # Refresh once Proxmox has finished, not after a guess
+            for vm, upid in tasks:
+                err = wait_for_task(cluster["host"], auth, upid)
+                if err:
+                    errors.append(f"{vm['name']}: {err}")
 
             def on_done():
                 if errors:
@@ -3259,8 +3282,9 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                         text=f"{action_label} sent to {len(valid)} VM(s)", fg=C["green"]
                     )
 
-            self.after(0, on_done)
-            self.after(0, lambda: self._poll_until_changed(expected, auth=poll_auth))
+            if not self._closing:
+                self.after(0, on_done)
+                self.after(0, self._refresh_vms)
 
         threading.Thread(target=do_action, daemon=True).start()
 
@@ -3317,93 +3341,23 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                         f"/snapshot/{urllib.parse.quote(snap_name, safe='')}/rollback",
                         method="POST", auth=saved_auth,
                     )
-                    if "error" in rb:
-                        self.after(0, lambda: messagebox.showerror("Failed", rb["error"], parent=self))
+                    error = rb.get("error") or wait_for_task(cluster["host"], saved_auth, rb.get("data"))
+                    if not self._closing:
+                        self.after(0, lambda: done(error))
+
+                def done(error):
+                    self._refresh_vms()
+                    if error:
+                        self.status_label.config(text="Rollback failed", fg=C["red"])
+                        messagebox.showerror("Rollback Failed", error, parent=self)
                     else:
-                        self.after(0, lambda: self.status_label.config(
-                            text=f"Rolled back to '{snap_name}'", fg=C["green"]
-                        ))
-                        self.after(0, lambda: self._poll_until_changed(
-                            {str(vm["vmid"]): "stopped"}, auth=saved_auth
-                        ))
+                        self.status_label.config(text=f"Rolled back to '{snap_name}'", fg=C["green"])
 
                 threading.Thread(target=do_rb, daemon=True).start()
 
             self.after(0, confirm)
 
         threading.Thread(target=fetch, daemon=True).start()
-
-    # ── Polling ──────────────────────────────────────────────────────────────
-    def _poll_until_changed(self, expected, auth=None, attempts=0, max_attempts=12):
-        if self._closing:
-            return
-        if attempts >= max_attempts:
-            self._refresh_vms()
-            return
-        cluster = self.current_cluster
-        if not auth:
-            auth = self._get_auth(cluster)
-        if not auth:
-            return
-        saved_auth = auth
-
-        def check():
-            data = api_request(
-                cluster["host"], "/api2/json/cluster/resources?type=vm",
-                auth=saved_auth,
-            )
-            if "error" in data:
-                return
-            vms = data.get("data", [])
-            all_ok = all(
-                next((v for v in vms if str(v.get("vmid")) == vmid), {}).get("status") == exp
-                for vmid, exp in expected.items()
-            )
-            if all_ok:
-                self.after(0, self._refresh_vms)
-            else:
-                self.after(0, lambda: self.after(
-                    10000, lambda: self._poll_until_changed(
-                        expected, auth=saved_auth, attempts=attempts + 1
-                    )
-                ))
-
-        threading.Thread(target=check, daemon=True).start()
-
-    def _poll_snap_changed(self, vmid, node, old_count, auth=None, attempts=0, max_attempts=12):
-        if self._closing:
-            return
-        if attempts >= max_attempts:
-            self._refresh_vms()
-            return
-        cluster = self.current_cluster
-        if not auth:
-            auth = self._get_auth(cluster)
-        if not auth:
-            return
-        saved_auth = auth
-
-        def check():
-            snap_data = api_request(
-                cluster["host"],
-                f"/api2/json/nodes/{node}/qemu/{vmid}/snapshot",
-                auth=saved_auth,
-            )
-            if "error" in snap_data:
-                return
-            current = len([
-                s for s in snap_data.get("data", []) if s.get("name") != "current"
-            ])
-            if current != old_count:
-                self.after(0, self._refresh_vms)
-            else:
-                self.after(0, lambda: self.after(
-                    10000, lambda: self._poll_snap_changed(
-                        vmid, node, old_count, auth=saved_auth, attempts=attempts + 1
-                    )
-                ))
-
-        threading.Thread(target=check, daemon=True).start()
 
     # ── Snapshots ────────────────────────────────────────────────────────────
     def _show_snapshots(self):
@@ -3413,12 +3367,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         auth = self._get_auth(self.current_cluster)
         if not auth:
             return
-        saved_auth = auth
-        SnapshotDialog(
-            self, vm, self.current_cluster, auth,
-            on_change=lambda vmid, node, old_count:
-                self._poll_snap_changed(vmid, node, old_count, auth=saved_auth),
-        )
+        SnapshotDialog(self, vm, self.current_cluster, auth, on_change=self._refresh_vms)
 
 
 CONFIG_DIR = Path.home() / ".config" / "proxmox-spice"

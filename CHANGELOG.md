@@ -81,6 +81,13 @@ to the other where the platforms allow it.
   hour without asking (Proxmox accepts the current ticket in place of the
   password), and the password is asked again only if renewal fails. API
   token logins have no ticket and are unchanged.
+- After Start, Shut down, Reboot, Force stop, a rollback or a snapshot change,
+  the list could show the old state: Windows refreshed after a fixed 3 seconds
+  (2–3 s in the Snapshots window), Linux checked every 10 seconds. Both apps
+  now follow the Proxmox task the action started, checking each second, and
+  refresh as soon as it ends. A task that fails shows Proxmox's reason (for
+  example "start failed: …"); Windows used to say nothing. Windows also skips
+  VMs already in the target state, as Linux does.
 - Linux: "Export .desktop for selected VM" made a launcher that opened the
   manager, not the VM, and assumed the script was `~/proxmox-spice-manager.py`.
   The launcher now runs `proxmox-spice-manager.py --connect "<cluster>" <vmid>`

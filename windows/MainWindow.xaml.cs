@@ -1000,22 +1000,43 @@ public partial class MainWindow : Window
             MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
 
+        // Start acts on stopped VMs, the others on running ones
+        var valid = vms.Where(v => action == "start" ? !v.IsRunning : v.IsRunning).ToList();
+        if (valid.Count == 0)
+        {
+            MessageBox.Show("All selected VMs are already in the target state.", "No Action",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         if (_selectedClusterIdx < 0) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
         var auth = await GetAuthAsync(cluster);
         if (auth == null) return;
 
-        foreach (var vm in vms)
+        var errors = new List<string>();
+        var started = new List<(VmDisplayItem Vm, JsonElement? Task)>();
+        foreach (var vm in valid)
         {
             var endpoint = $"/api2/json/nodes/{vm.Node}/qemu/{vm.VmId}/status/{action}";
-            await ProxmoxApi.RequestAsync(cluster.Host, endpoint, "POST", auth);
+            var result = await ProxmoxApi.RequestAsync(cluster.Host, endpoint, "POST", auth);
+            if (result == null)
+                errors.Add($"{vm.Name}: the request failed (see the debug log)");
+            else
+                started.Add((vm, result));
         }
 
-        StatusLabel.Text = vms.Count == 1
-            ? $"{action} sent to {vms[0].Name}. Refreshing..."
-            : $"{action} sent to {vms.Count} VMs. Refreshing...";
-        await Task.Delay(3000);
+        // Refresh once Proxmox has finished, not after a guess
+        StatusLabel.Text = $"{action} sent to {Names(valid)}. Waiting for Proxmox...";
+        var outcomes = await Task.WhenAll(started.Select(async s =>
+            (s.Vm, Error: await ProxmoxApi.WaitForTaskAsync(cluster.Host, auth, s.Task))));
+        errors.AddRange(outcomes.Where(o => o.Error != null).Select(o => $"{o.Vm.Name}: {o.Error}"));
         await RefreshVmsAsync();
+        if (errors.Count > 0)
+        {
+            StatusLabel.Text = "Some actions failed";
+            MessageBox.Show(string.Join("\n", errors), "Errors", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private static string Names(List<VmDisplayItem> vms) =>
@@ -1173,14 +1194,18 @@ public partial class MainWindow : Window
             "Confirm Rollback", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
 
-        await ProxmoxApi.RequestAsync(
+        StatusLabel.Text = $"Rolling back to '{snapName}'...";
+        var result = await ProxmoxApi.RequestAsync(
             cluster.Host,
             $"/api2/json/nodes/{vm.Node}/qemu/{vm.VmId}/snapshot/{Uri.EscapeDataString(snapName)}/rollback",
             "POST", auth);
+        var error = result == null ? "the request failed (see the debug log)"
+            : await ProxmoxApi.WaitForTaskAsync(cluster.Host, auth, result);
 
-        StatusLabel.Text = $"Rolled back to '{snapName}'";
-        await Task.Delay(3000);
         await RefreshVmsAsync();
+        StatusLabel.Text = error == null ? $"Rolled back to '{snapName}'" : "Rollback failed";
+        if (error != null)
+            MessageBox.Show(error, "Rollback Failed", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
     // ── Settings menu ──────────────────────────────────────────────────────

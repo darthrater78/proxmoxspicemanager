@@ -109,6 +109,32 @@ public class ProxmoxApi
         }
     }
 
+    // Wait for the task a POST started (its "data" is the task's UPID): null once it ended
+    // well, else why not. Proxmox runs start, shutdown, snapshots etc. as background tasks,
+    // so the POST returns before the work is done.
+    public static async Task<string?> WaitForTaskAsync(string host, AuthInfo? auth, JsonElement? started,
+        TimeSpan? timeout = null)
+    {
+        if (started?.TryGetProperty("data", out var data) != true || data.ValueKind != JsonValueKind.String ||
+            data.GetString() is not { } upid || !upid.StartsWith("UPID:"))
+            return null;  // nothing to wait for
+        var node = upid.Split(':')[1];
+        var path = $"/api2/json/nodes/{Uri.EscapeDataString(node)}/tasks/{Uri.EscapeDataString(upid)}/status";
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromMinutes(3));
+        while (DateTime.UtcNow < deadline)
+        {
+            var status = await RequestAsync(host, path, auth: auth);
+            if (status?.TryGetProperty("data", out var task) == true &&
+                task.TryGetProperty("status", out var state) && state.GetString() == "stopped")
+            {
+                var exit = task.TryGetProperty("exitstatus", out var e) ? e.GetString() ?? "" : "";
+                return exit == "OK" || exit.StartsWith("WARNINGS") ? null : exit.Length > 0 ? exit : "task failed";
+            }
+            await Task.Delay(1000);
+        }
+        return "still running after 3 minutes";
+    }
+
     public static async Task<AuthInfo?> AuthenticatePasswordAsync(
         string host, string username, string password, string? pin = null)
     {

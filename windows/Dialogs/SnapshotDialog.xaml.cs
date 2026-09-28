@@ -82,10 +82,7 @@ public partial class SnapshotDialog : Window
             _cluster.Host,
             $"/api2/json/nodes/{_vm.Node}/qemu/{_vm.VmId}/snapshot/{Uri.EscapeDataString(snap.Name)}/rollback",
             "POST", _auth);
-
-        SnapStatus.Text = result != null ? $"Rolled back to '{snap.Name}'" : "Rollback failed";
-        await Task.Delay(3000);
-        await LoadSnapshots();
+        await FinishTask(result, "Rollback", $"Rolled back to '{snap.Name}'");
     }
 
     private async void OnDelete(object sender, RoutedEventArgs e)
@@ -97,13 +94,11 @@ public partial class SnapshotDialog : Window
             return;
 
         SnapStatus.Text = $"Deleting '{snap.Name}'...";
-        await ProxmoxApi.RequestAsync(
+        var result = await ProxmoxApi.RequestAsync(
             _cluster.Host,
             $"/api2/json/nodes/{_vm.Node}/qemu/{_vm.VmId}/snapshot/{Uri.EscapeDataString(snap.Name)}",
             "DELETE", _auth);
-
-        await Task.Delay(2000);
-        await LoadSnapshots();
+        await FinishTask(result, "Delete", $"Deleted '{snap.Name}'");
     }
 
     private async void OnCreate(object sender, RoutedEventArgs e)
@@ -120,8 +115,22 @@ public partial class SnapshotDialog : Window
         if (dlg.IncludeRam)
             endpoint += "&vmstate=1";
 
-        await ProxmoxApi.RequestAsync(_cluster.Host, endpoint, "POST", _auth);
-        await Task.Delay(3000);
+        var result = await ProxmoxApi.RequestAsync(_cluster.Host, endpoint, "POST", _auth);
+        await FinishTask(result, "Snapshot", $"Snapshot '{dlg.SnapshotName}' created");
+    }
+
+    // Wait for the snapshot task Proxmox started, then show the outcome and the new list
+    private async Task FinishTask(System.Text.Json.JsonElement? result, string what, string done)
+    {
+        var error = result == null ? "the request failed (see the debug log)"
+            : await ProxmoxApi.WaitForTaskAsync(_cluster.Host, _auth, result);
         await LoadSnapshots();
+        if (error == null)
+        {
+            SnapStatus.Text = done;
+            return;
+        }
+        SnapStatus.Text = $"{what} failed";
+        MessageBox.Show(this, error, $"{what} Failed", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }
