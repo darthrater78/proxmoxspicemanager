@@ -49,6 +49,49 @@
         <Geometry x:Key="IconSearch">M7,2.5 A4.5,4.5 0 1 0 7,11.5 A4.5,4.5 0 1 0 7,2.5 M10.3,10.3 L13.5,13.5</Geometry>
         <Geometry x:Key="IconChevron">M4.5,6.5 L8,10 L11.5,6.5</Geometry>
         <Geometry x:Key="IconCheck">M3.5,8.5 L6.5,11.5 L12.5,4.5</Geometry>
+        <!-- An on/off chip: a tick and a lighter fill when on -->
+        <Style x:Key="ToggleChip" TargetType="ToggleButton">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Bd" CornerRadius="14" Padding="12,5" BorderThickness="1"
+                                Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}">
+                            <StackPanel Orientation="Horizontal">
+                                <Path x:Name="Tick" Style="{StaticResource Glyph}" Data="{StaticResource IconCheck}" Width="14"
+                                      Stroke="{DynamicResource ThemeText}" Margin="0,0,6,0" Visibility="Collapsed"/>
+                                <TextBlock Text="{TemplateBinding Content}" Foreground="{DynamicResource ThemeText}"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ThemeSurface2}"/>
+                                <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- List column headings: click to sort, like the Linux app -->
+        <Style x:Key="ColumnHeading" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeOverlay1}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="ToolTip" Value="Sort by this column"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
 
         <!-- Key cap, e.g. "F5" -->
         <Style x:Key="Key" TargetType="Border">
@@ -354,31 +397,10 @@
                     <!-- Filter chips; grouping and sort on the right -->
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,8,4">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                        <ToggleButton x:Name="GroupToggle" Click="OnGroupToggle" Cursor="Hand" FocusVisualStyle="{x:Null}"
-                                      Margin="0,0,6,0" ToolTip="Group VMs under the node they run on">
-                            <ToggleButton.Template>
-                                <ControlTemplate TargetType="ToggleButton">
-                                    <Border x:Name="Bd" CornerRadius="14" Padding="12,5" BorderThickness="1"
-                                            Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <Path x:Name="Tick" Style="{StaticResource Glyph}" Data="{StaticResource IconCheck}" Width="14"
-                                                  Stroke="{DynamicResource ThemeText}" Margin="0,0,6,0" Visibility="Collapsed"/>
-                                            <TextBlock Text="Group by node" Foreground="{DynamicResource ThemeText}"/>
-                                        </StackPanel>
-                                    </Border>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
-                                        </Trigger>
-                                        <Trigger Property="IsChecked" Value="True">
-                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
-                                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ThemeSurface2}"/>
-                                            <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </ToggleButton.Template>
-                        </ToggleButton>
+                        <ToggleButton x:Name="Ipv6Toggle" Style="{StaticResource ToggleChip}" Content="IPv6" Click="OnIpv6Toggle"
+                                      Margin="0,0,6,0" ToolTip="Show IPv6 addresses too"/>
+                        <ToggleButton x:Name="GroupToggle" Style="{StaticResource ToggleChip}" Content="Group by node" Click="OnGroupToggle"
+                                      Margin="0,0,6,0" ToolTip="Group VMs under the node they run on"/>
                         <Button x:Name="SortBtn" Style="{StaticResource CmdButton}" Padding="12,5" Click="OnSortMenu" ToolTip="Sort VMs">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock x:Name="SortText" Text="Sort: ID ▲"/>
@@ -392,6 +414,24 @@
                         <RadioButton x:Name="FilterStopped" Style="{StaticResource Chip}" GroupName="VmFilter" Checked="OnFilterChanged" Content="Stopped"/>
                     </StackPanel>
                     </DockPanel>
+
+                    <!-- Column headings, on the same columns as a row (margins: row border and padding, list padding) -->
+                    <Grid x:Name="ColumnHeadings" DockPanel.Dock="Top" Margin="11,6,19,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="42"/>
+                            <ColumnDefinition Width="3*" MinWidth="120"/>
+                            <ColumnDefinition Width="{DynamicResource AddressColumnWidth}"/>
+                            <ColumnDefinition Width="2*" MinWidth="60"/>
+                            <ColumnDefinition Width="46"/>
+                            <ColumnDefinition Width="86"/>
+                            <ColumnDefinition Width="98"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="1" Tag="name" Text="NAME" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
+                        <TextBlock Grid.Column="2" Tag="ip" Text="ADDRESS" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
+                        <TextBlock Grid.Column="3" Tag="notes" Text="NOTES" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
+                        <TextBlock Grid.Column="4" Tag="snaps" Text="SNAPS" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
+                        <TextBlock Grid.Column="5" Tag="status" Text="STATUS" Style="{StaticResource ColumnHeading}" MouseLeftButtonUp="OnHeadingClick"/>
+                    </Grid>
 
                     <Grid>
                         <TextBlock x:Name="EmptyText" Text="No VMs to show" Foreground="{DynamicResource ThemeOverlay1}"
@@ -490,7 +530,7 @@
                                                 <TextBlock x:Name="Name" Text="{Binding Name}" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}" TextTrimming="CharacterEllipsis"/>
                                                 <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="{DynamicResource ThemeSubtext0}" TextTrimming="CharacterEllipsis"/>
                                             </StackPanel>
-                                            <Border x:Name="AddressBox" Grid.Column="2" Margin="0,0,10,0">
+                                            <Border x:Name="AddressBox" Grid.Column="2" Margin="0,0,24,0">
                                                 <TextBlock FontFamily="{StaticResource Mono}" FontSize="12"
                                                            Foreground="{DynamicResource ThemeSubtext1}" VerticalAlignment="Center">
                                                     <TextBlock.Text>
@@ -502,9 +542,9 @@
                                                     </TextBlock.Text>
                                                 </TextBlock>
                                             </Border>
-                                            <TextBlock Grid.Column="3" Text="{Binding Notes}" Foreground="{DynamicResource ThemeSubtext1}"
+                                            <TextBlock Grid.Column="3" Text="{Binding NotesColumn}" Foreground="{DynamicResource ThemeSubtext1}"
                                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
-                                                       ToolTip="{Binding Notes}"/>
+                                                       ToolTip="{Binding NotesColumn}"/>
                                             <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" ToolTip="Snapshots">
                                                 <Path Style="{StaticResource Glyph}" Stroke="{DynamicResource ThemeOverlay1}" Data="{StaticResource IconCamera}"/>
                                                 <TextBlock Text="{Binding SnapCount}" Foreground="{DynamicResource ThemeSubtext0}" Margin="5,0,0,0"/>
@@ -579,7 +619,7 @@
 
                                 <Grid x:Name="InspectorDetails" Margin="0,18,0,0">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
                                     <TextBlock Grid.Row="0" Text="VM ID" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>
                                     <TextBlock Grid.Row="0" Grid.Column="1" x:Name="DetailId" Foreground="{DynamicResource ThemeText}"/>
                                     <TextBlock Grid.Row="1" Text="Address" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>
@@ -588,8 +628,13 @@
                                     <TextBlock Grid.Row="2" Grid.Column="1" x:Name="DetailNode" Foreground="{DynamicResource ThemeText}"/>
                                     <TextBlock Grid.Row="3" Text="Pool" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>
                                     <TextBlock Grid.Row="3" Grid.Column="1" x:Name="DetailPool" Foreground="{DynamicResource ThemeText}"/>
-                                    <TextBlock Grid.Row="4" Text="Notes" Foreground="{DynamicResource ThemeSubtext0}" VerticalAlignment="Center"/>
-                                    <Border Grid.Row="4" Grid.Column="1" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ThemeSurface1}"
+                                    <!-- The VM's own Notes from Proxmox, read-only; hidden when it has none -->
+                                    <TextBlock Grid.Row="4" x:Name="DetailPveNotesLabel" Text="Proxmox" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"
+                                               ToolTip="The VM's Notes in Proxmox"/>
+                                    <TextBlock Grid.Row="4" Grid.Column="1" x:Name="DetailPveNotes" Foreground="{DynamicResource ThemeText}" Margin="0,0,0,9"
+                                               TextWrapping="Wrap" MaxHeight="72" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Row="5" Text="Notes" Foreground="{DynamicResource ThemeSubtext0}" VerticalAlignment="Center"/>
+                                    <Border Grid.Row="5" Grid.Column="1" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ThemeSurface1}"
                                             Background="{DynamicResource ThemeBase}">
                                         <DockPanel>
                                             <Button x:Name="NotesMenuBtn" DockPanel.Dock="Right" Style="{StaticResource NavButton}" Padding="4,3"

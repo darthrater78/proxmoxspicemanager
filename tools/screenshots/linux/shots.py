@@ -50,6 +50,11 @@ VMS = [
 ]
 
 
+# The VMs' own Notes in Proxmox (their config "description")
+PVE_NOTES = {102: "## Build workstation\nSee the wiki for the toolchain setup.",
+             140: "Reset weekly from the base snapshot"}
+
+
 class Shots(psm.ProxmoxSpiceManager):
     def _refresh_vms(self):
         cluster = self.current_cluster
@@ -63,7 +68,7 @@ class Shots(psm.ProxmoxSpiceManager):
              # A string stands for why there's no address ("", "no agent")
              "ips": ip if isinstance(ip, list) else [("eth0", ip)] if ip[:1].isdigit() else [],
              "ip_note": "" if isinstance(ip, list) or ip[:1].isdigit() else ip,
-             "note": self._lookup_vm_note(vmid)}
+             "note": self._lookup_vm_note(vmid), "pve_note": PVE_NOTES.get(vmid, "")}
             for vmid, name, node, pool, snaps, status, ip, ostype in VMS
         ]
         self._loaded_cluster = cluster["name"]
@@ -114,6 +119,9 @@ def run(app):
     app._toggle_grouping()
     app._sort_by("ip")
     capture(app, "linux-state-ungrouped.png")
+    # A VM with Notes in Proxmox: its first line in the list, all of it in the inspector
+    tree.selection_set(["vm:102"])
+    capture(app, "linux-state-proxmox-notes.png")
     # Wide window with IPv6 on: the address column grows to show every address
     app._toggle_ipv6()
     app.geometry("1800x760")

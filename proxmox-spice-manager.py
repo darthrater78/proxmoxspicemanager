@@ -948,6 +948,17 @@ def vm_ips(vm, ipv6):
     return [(a, ip) for a, ip in vm.get("ips", []) if ipv6 or ":" not in ip]
 
 
+def note_lines(text):
+    """Proxmox notes as plain lines: no markdown heading or list markers, no blank lines."""
+    lines = (line.strip().lstrip("#*->").strip() for line in (text or "").splitlines())
+    return [line for line in lines if line]
+
+
+def notes_cell(vm):
+    """The list's Notes column: the first line of the Proxmox notes, else this app's note."""
+    return next(iter(note_lines(vm.get("pve_note", ""))), "") or vm["note"]
+
+
 def fit_addresses(ips, width, measure):
     """As many addresses as fit in `width` pixels, then "+N" for the rest."""
     full = ", ".join(ips)
@@ -980,7 +991,7 @@ def vm_sort_key(vm, column, ipv6=False):
     if column == "status":
         return (vm["status"] != "running", vm["status"])
     text = {"name": vm["name"], "node": vm["node"], "pool": vm["pool"],
-            "notes": vm["note"]}.get(column, "")
+            "notes": notes_cell(vm)}.get(column, "")
     return (text == "", text.casefold())
 
 
@@ -1401,6 +1412,10 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                                     highlightthickness=1)
         self._group_chip.pack(side="right")
         self._group_chip.bind("<Button-1>", lambda e: self._toggle_grouping())
+        self._ipv6_chip = tk.Label(chips, text="IPv6", padx=12, pady=3, font=(FONT, 10),
+                                   cursor="hand2", highlightthickness=1)
+        self._ipv6_chip.pack(side="right", padx=(0, 6))
+        self._ipv6_chip.bind("<Button-1>", lambda e: self._toggle_ipv6())
 
         table = tk.Frame(main, bg=C["base"])
         table.pack(fill="both", expand=True)
@@ -1473,12 +1488,13 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 highlightbackground=C["accent"] if on else C["surface1"],
                 font=(FONT, 10, "bold") if on else (FONT, 10),
             )
-        grouped = self._group_by_node
-        self._group_chip.config(
-            text="✓ Group by node" if grouped else "Group by node",
-            bg=C["surface1"] if grouped else C["surface0"], fg=C["text"],
-            highlightbackground=C["surface2"] if grouped else C["surface1"],
-        )
+        for chip, label, on in ((self._group_chip, "Group by node", self._group_by_node),
+                                (self._ipv6_chip, "IPv6", self._show_ipv6)):
+            chip.config(
+                text=f"✓ {label}" if on else label,
+                bg=C["surface1"] if on else C["surface0"], fg=C["text"],
+                highlightbackground=C["surface2"] if on else C["surface1"],
+            )
 
     def _vm_matches(self, vm, query):
         running = vm["status"] == "running"
@@ -1489,7 +1505,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         if not query:
             return True
         fields = (vm["name"], str(vm["vmid"]), vm["node"], vm["pool"], vm["note"],
-                  os_label(vm["ostype"]), *(ip for _, ip in vm_ips(vm, self._show_ipv6)))
+                  vm.get("pve_note", ""), os_label(vm["ostype"]), *(ip for _, ip in vm_ips(vm, self._show_ipv6)))
         return any(query in f.lower() for f in fields)
 
     def _render_vms(self, keep=None):
@@ -1550,7 +1566,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self.vm_tree.insert(parent, "end", iid=iid, tags=("running" if is_running else "stopped",),
                             values=(os_badge(vm["ostype"]), vm["name"], vm["vmid"],
                                     self._address_cell(vm), vm["node"], vm["pool"] or "—",
-                                    vm["snaps"], status, vm["note"]))
+                                    vm["snaps"], status, notes_cell(vm)))
         self._iid_to_vm[iid] = vm
 
     def _show_addresses(self, vm):
@@ -1783,11 +1799,18 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 value = tk.Label(details, bg=bg, fg=C["text"], anchor="w", font=(FONT, 10))
             value.grid(row=row, column=1, sticky="nw", padx=(12, 0), pady=(0, 6))
             self._detail[key] = value
+        # The VM's own Notes from Proxmox, read-only; hidden when it has none
+        self._pve_notes_label = tk.Label(details, text="Proxmox", bg=bg, fg=C["subtext0"],
+                                         font=(FONT, 10), anchor="w")
+        self._pve_notes_label.grid(row=4, column=0, sticky="nw", pady=(0, 6))
+        self._pve_notes = tk.Label(details, bg=bg, fg=C["text"], font=(FONT, 10), anchor="w",
+                                   justify="left", wraplength=170)
+        self._pve_notes.grid(row=4, column=1, sticky="nw", padx=(12, 0), pady=(0, 8))
         tk.Label(details, text="Notes", bg=bg, fg=C["subtext0"], font=(FONT, 10),
-                 anchor="w").grid(row=4, column=0, sticky="w")
+                 anchor="w").grid(row=5, column=0, sticky="w")
         notes = tk.Frame(details, bg=C["base"], highlightthickness=1,
                          highlightbackground=C["surface1"])
-        notes.grid(row=4, column=1, sticky="ew", padx=(12, 0))
+        notes.grid(row=5, column=1, sticky="ew", padx=(12, 0))
         self._notes_menu_btn = tk.Label(notes, text="▾", bg=C["base"], fg=C["subtext1"],
                                         font=(FONT, 10), padx=6, cursor="hand2")
         self._notes_menu_btn.pack(side="right")
@@ -1850,6 +1873,13 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             self._console_btn.set_text("Open SPICE console")
             self._detail["vmid"].config(text=single["vmid"])
             self._show_addresses(single)
+            pve_note = "\n".join(note_lines(single.get("pve_note", ""))[:4])
+            self._pve_notes.config(text=pve_note)
+            for widget in (self._pve_notes_label, self._pve_notes):
+                if pve_note:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
             self._detail["node"].config(text=single["node"])
             self._detail["pool"].config(text=single["pool"] or "—")
             self._details.pack(fill="x", pady=(16, 0), after=self._console_btn)
@@ -1886,7 +1916,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._save_config()
         iid = f"vm:{vm['vmid']}"
         if hasattr(self, "vm_tree") and self.vm_tree.exists(iid):
-            self.vm_tree.set(iid, "notes", val)
+            self.vm_tree.set(iid, "notes", notes_cell(vm))
 
     def _on_notes_return(self, event=None):
         self._commit_note()
@@ -1994,9 +2024,6 @@ class ProxmoxSpiceManagerBase(tk.Tk):
              self._toggle_debug_log),
             ("Open debug log", self._open_debug_log, DebugLogger.enabled),
             ("Check prerequisites", self._recheck_prereqs),
-            None,
-            ("IPv6 addresses: shown" if self._show_ipv6 else "IPv6 addresses: hidden",
-             self._toggle_ipv6),
         ]
         entries += self._platform_menu_entries()
         self._show_menu(self._settings_btn, entries)
@@ -2420,6 +2447,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                     continue
                 vm["_ostype"] = str(config.get("data", {}).get("ostype", ""))
                 vm["_has_agent"] = agent_has_agent(config.get("data", {}).get("agent"))
+                vm["_description"] = str(config.get("data", {}).get("description", ""))
                 vga = str(config.get("data", {}).get("vga", "")).lower()
                 if "qxl" in vga or "spice" in vga:
                     snap_data = api_request(
@@ -2464,6 +2492,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 "status": vm.get("status", ""),
                 "ips": vm.get("_ips", []),
                 "ip_note": vm.get("_ip_note", ""),
+                "pve_note": vm.get("_description", ""),
                 "ostype": vm.get("_ostype", ""),
                 "note": self._lookup_vm_note(vm.get("vmid", "")),
             } for vm in spice_vms]

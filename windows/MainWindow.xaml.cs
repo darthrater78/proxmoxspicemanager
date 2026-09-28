@@ -48,6 +48,7 @@ public partial class MainWindow : Window
         if (!VmComparer.Labels.ContainsKey(_config.VmSort)) _config.VmSort = "vmid";
         GroupToggle.IsChecked = _config.GroupByNode;
         VmDisplayItem.ShowIpv6 = _config.ShowIpv6;
+        Ipv6Toggle.IsChecked = _config.ShowIpv6;
         ApplySortAndGrouping();
 
         RefreshClusterList();
@@ -355,12 +356,13 @@ public partial class MainWindow : Window
             var configResults = await Task.WhenAll(configTasks);
             DebugLogger.StopTimer(phaseSw, $"Phase 3: VM configs ({vmEntries.Count} VMs)");
 
-            var spiceVms = new List<(int vmid, string name, string status, string nodeName, string pool, bool hasAgent, string osType)>();
+            var spiceVms = new List<(int vmid, string name, string status, string nodeName, string pool, bool hasAgent, string osType, string description)>();
             for (int i = 0; i < vmEntries.Count; i++)
             {
                 bool hasSpice = false;
                 bool hasAgent = false;
                 string osType = "";
+                string description = "";
                 if (configResults[i]?.TryGetProperty("data", out var cfgData) == true)
                 {
                     foreach (var prop in cfgData.EnumerateObject())
@@ -372,10 +374,12 @@ public partial class MainWindow : Window
                             hasAgent = true;
                         if (prop.Name == "ostype")
                             osType = prop.Value.GetString() ?? "";
+                        if (prop.Name == "description")
+                            description = prop.Value.GetString() ?? "";
                     }
                 }
                 if (hasSpice) spiceVms.Add((vmEntries[i].vmid, vmEntries[i].name,
-                    vmEntries[i].status, vmEntries[i].nodeName, vmEntries[i].pool, hasAgent, osType));
+                    vmEntries[i].status, vmEntries[i].nodeName, vmEntries[i].pool, hasAgent, osType, description));
             }
 
             DebugLogger.Log($"[Refresh] {spiceVms.Count} SPICE-enabled VMs found");
@@ -414,6 +418,7 @@ public partial class MainWindow : Window
                     OsType = e.osType,
                     IpNote = e.hasAgent ? "" : "no agent",
                     Notes = LookupVmNote(e.vmid) ?? "",
+                    ProxmoxNotes = e.description,
                 });
             }
 
@@ -585,7 +590,7 @@ public partial class MainWindow : Window
 
         var q = SearchBox.Text.Trim();
         if (q.Length == 0) return true;
-        return new[] { vm.Name, vm.VmId.ToString(), vm.Node, vm.Pool, vm.Notes, vm.OsLabel }
+        return new[] { vm.Name, vm.VmId.ToString(), vm.Node, vm.Pool, vm.Notes, vm.ProxmoxNotes, vm.OsLabel }
             .Concat(vm.ShownIps.Select(a => a.Ip))
             .Any(f => f.Contains(q, StringComparison.OrdinalIgnoreCase));
     }
@@ -607,11 +612,17 @@ public partial class MainWindow : Window
             view.IsLiveSorting = true;
             view.LiveSortingProperties.Clear();
             view.LiveSortingProperties.Add(nameof(VmDisplayItem.IpAddress));
-            view.LiveSortingProperties.Add(nameof(VmDisplayItem.Notes));
+            view.LiveSortingProperties.Add(nameof(VmDisplayItem.NotesColumn));
         }
         VmDisplayItem.ShowNode = !grouped;
         foreach (var vm in _vmItems) vm.RefreshDetail();
         SortText.Text = $"Sort: {VmComparer.Labels[_config.VmSort]} {(_config.VmSortDesc ? "▼" : "▲")}";
+        foreach (var heading in ColumnHeadings.Children.OfType<TextBlock>())
+        {
+            var key = (string)heading.Tag;
+            var label = key == "snaps" ? "SNAPS" : VmComparer.Labels[key].ToUpperInvariant();
+            heading.Text = key == _config.VmSort ? $"{label}  {(_config.VmSortDesc ? "▼" : "▲")}" : label;
+        }
         foreach (var vm in keep.Where(IsShown))
             if (!VmList.SelectedItems.Contains(vm)) VmList.SelectedItems.Add(vm);
         if (VmList.SelectedItem != null) VmList.ScrollIntoView(VmList.SelectedItem);
@@ -637,7 +648,7 @@ public partial class MainWindow : Window
         var needed = _vmItems.Select(vm => new FormattedText(string.Join(", ", vm.AddressParts),
                 System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, 12,
                 Brushes.Black, pixelsPerDip).WidthIncludingTrailingWhitespace)
-            .DefaultIfEmpty(0).Max() + 12;
+            .DefaultIfEmpty(0).Max() + 26;
         var free = VmList.ActualWidth - FixedRowWidth - MinAddressWidth - MinNameAndNotes;
         var extra = Math.Max(0, Math.Min(needed - MinAddressWidth, free * 0.5));
         Resources["AddressColumnWidth"] = new GridLength(MinAddressWidth + extra);
@@ -703,6 +714,11 @@ public partial class MainWindow : Window
         _config.GroupByNode = GroupToggle.IsChecked == true;
         SaveConfig();
         ApplySortAndGrouping();
+    }
+
+    private void OnHeadingClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is TextBlock { Tag: string key }) SortBy(key);
     }
 
     private void OnSortMenu(object sender, RoutedEventArgs e)
@@ -850,6 +866,10 @@ public partial class MainWindow : Window
             OpenConsoleText.Text = "Open SPICE console";
             DetailId.Text = single.VmId.ToString();
             ShowAddresses(single);
+            var pveNotes = string.Join("\n", single.ProxmoxNoteLines.Take(4));
+            DetailPveNotes.Text = pveNotes;
+            DetailPveNotes.Visibility = DetailPveNotesLabel.Visibility =
+                pveNotes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             DetailNode.Text = single.Node;
             DetailPool.Text = single.PoolOrDash;
             NotesBox.Text = single.Notes;
@@ -1114,8 +1134,6 @@ public partial class MainWindow : Window
             new("Open debug log", OpenLogFile, DebugLogger.Enabled),
             new("Check prerequisites", CheckPrereqs),
             new("Create Start Menu shortcut", CreateShortcut),
-            null,
-            new(_config.ShowIpv6 ? "IPv6 addresses: shown" : "IPv6 addresses: hidden", ToggleIpv6),
         ]);
     }
 
@@ -1265,9 +1283,12 @@ public partial class MainWindow : Window
     }
 
     // ── Debug Logging ─────────────────────────────────────────────────────
+    private void OnIpv6Toggle(object sender, RoutedEventArgs e) => ToggleIpv6();
+
     private void ToggleIpv6()
     {
         _config.ShowIpv6 = !_config.ShowIpv6;
+        Ipv6Toggle.IsChecked = _config.ShowIpv6;
         VmDisplayItem.ShowIpv6 = _config.ShowIpv6;
         SaveConfig();
         foreach (var vm in _vmItems) vm.RefreshAddress();

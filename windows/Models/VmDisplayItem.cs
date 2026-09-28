@@ -60,8 +60,20 @@ public class VmDisplayItem : INotifyPropertyChanged
             _notes = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(HasNotes));
+            OnPropertyChanged(nameof(NotesColumn));
         }
     }
+
+    // The VM's Notes in Proxmox (its config "description", often markdown)
+    public string ProxmoxNotes { get; set; } = "";
+
+    // The Proxmox notes as plain lines: no markdown heading or list markers, no blank lines
+    public IEnumerable<string> ProxmoxNoteLines =>
+        ProxmoxNotes.Split('\n').Select(l => l.Trim().TrimStart('#', '*', '-', '>', ' ').Trim())
+            .Where(l => l.Length > 0);
+
+    // The list's Notes column: the first line of the Proxmox notes, else this app's note
+    public string NotesColumn => ProxmoxNoteLines.FirstOrDefault() ?? Notes;
 
     public bool IsRunning => Status.Equals("running", StringComparison.OrdinalIgnoreCase);
     public string StatusText => Status.Length > 0

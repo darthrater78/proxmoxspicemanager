@@ -140,6 +140,12 @@ static class Program
         Pump(400);
         Capture(w, Path.Combine(outDir, "windows-state-ungrouped.png"));
 
+        // A VM with Notes in Proxmox: its first line in the list, all of it in the inspector
+        list.SelectedItems.Clear();
+        list.SelectedItem = list.Items.OfType<VmDisplayItem>().First(v => v.VmId == 102);
+        Pump(400);
+        Capture(w, Path.Combine(outDir, "windows-state-proxmox-notes.png"));
+
         // Wide window with IPv6 on: the address column grows to show every address
         Call(w, "ToggleIpv6");
         w.Width = 1800;
@@ -197,13 +203,13 @@ static class Program
     static readonly VmDisplayItem[] MockVms =
     [
         new() { VmId = 101, Name = "win11-dev", Node = "pve1", Pool = "desktops", SnapCount = 3, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.41"), ("Ethernet 2", "192.168.50.41"), ("Ethernet", "2001:db8:20::41")], OsType = "win11", Notes = "Daily driver" },
-        new() { VmId = 102, Name = "fedora-43-ws", Node = "pve1", Pool = "desktops", SnapCount = 1, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.42")], OsType = "l26", Notes = "" },
+        new() { VmId = 102, Name = "fedora-43-ws", Node = "pve1", Pool = "desktops", SnapCount = 1, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.42")], OsType = "l26", Notes = "", ProxmoxNotes = "## Build workstation\nSee the wiki for the toolchain setup." },
         new() { VmId = 103, Name = "ubuntu-2404-desk", Node = "pve2", Pool = "desktops", SnapCount = 0, Status = "stopped", HasAgent = true, IpNote = "", OsType = "l26", Notes = "" },
         new() { VmId = 110, Name = "kali-lab", Node = "pve2", Pool = "security", SnapCount = 5, Status = "running", HasAgent = false, IpNote = "no agent", OsType = "l26", Notes = "Testing" },
         new() { VmId = 120, Name = "win-server-2025", Node = "pve1", Pool = "servers", SnapCount = 2, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.60")], OsType = "win11", Notes = "Domain controller" },
         new() { VmId = 121, Name = "debian-13-build", Node = "pve3", Pool = "servers", SnapCount = 0, Status = "stopped", HasAgent = true, IpNote = "", OsType = "l26", Notes = "" },
         new() { VmId = 130, Name = "win10-legacy", Node = "pve3", Pool = "desktops", SnapCount = 1, Status = "stopped", HasAgent = true, IpNote = "", OsType = "win10", Notes = "Keep for old apps" },
-        new() { VmId = 140, Name = "arch-sandbox", Node = "pve2", Pool = "", SnapCount = 4, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.75")], OsType = "l26", Notes = "" },
+        new() { VmId = 140, Name = "arch-sandbox", Node = "pve2", Pool = "", SnapCount = 4, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.75")], OsType = "l26", Notes = "", ProxmoxNotes = "Reset weekly from the base snapshot" },
     ];
 
     // Design prototypes: loose XAML files (no code-behind) bound to ProposalData

@@ -31,7 +31,7 @@ public class VmComparer(string key, bool descending, bool byNodeFirst) : ICompar
             "snaps" => a.SnapCount.CompareTo(b.SnapCount),
             "status" => (a.IsRunning ? 0 : 1).CompareTo(b.IsRunning ? 0 : 1) is var r and not 0
                 ? r : Text(a.Status, b.Status),
-            "notes" => Text(a.Notes, b.Notes),
+            "notes" => Text(a.NotesColumn, b.NotesColumn),
             _ => a.VmId.CompareTo(b.VmId),
         };
         if (result == 0 && key != "vmid") result = a.VmId.CompareTo(b.VmId);
