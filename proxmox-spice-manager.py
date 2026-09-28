@@ -14,6 +14,8 @@ VERSION 3.0.0
 
 import copy
 import fcntl
+import hashlib
+import http.client
 import importlib
 import ipaddress
 import json
@@ -22,14 +24,13 @@ import logging.handlers
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import ssl
-import urllib.request
 import urllib.parse
-import urllib.error
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -198,80 +199,124 @@ MONO = "monospace"
 
 
 # ─── Proxmox API Helpers ─────────────────────────────────────────────────────
-def _get_ssl_context(skip_tls_verify=False):
+class TlsUntrusted(Exception):
+    """The server's certificate isn't trusted: not signed by a CA this system
+    trusts, and not the one pinned for the cluster. Raised before anything
+    (token, password, ticket) is sent."""
+
+    def __init__(self, fingerprint, changed):
+        super().__init__("certificate changed" if changed else "certificate not trusted")
+        self.fingerprint = fingerprint
+        self.changed = changed  # a pin exists and this certificate doesn't match it
+
+
+def cert_fingerprint(der):
+    """SHA-256 of a DER certificate, as Proxmox shows it: AB:CD:…"""
+    return ":".join(f"{b:02X}" for b in hashlib.sha256(der).digest())
+
+
+def _fetch_fingerprint(hostname, port, timeout):
+    """The certificate a server presents, read without trusting it (only to show the user)."""
     ctx = ssl.create_default_context()
-    if skip_tls_verify:
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((hostname, port), timeout=timeout) as sock:
+        with ctx.wrap_socket(sock, server_hostname=hostname) as tls:
+            return cert_fingerprint(tls.getpeercert(binary_form=True))
+
+
+def _connect(host, pin, timeout):
+    """An HTTPS connection whose certificate is already checked, before any request is
+    sent: CA-verified as usual, or, when the cluster has a pinned fingerprint, exactly
+    that certificate. Anything else raises TlsUntrusted."""
+    url = urllib.parse.urlparse(host)
+    hostname, port = url.hostname, url.port or 443
+    ctx = ssl.create_default_context()
+    if pin:
+        # The pin replaces CA and hostname checks; the fingerprint check below is stricter
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+    conn = http.client.HTTPSConnection(hostname, port, context=ctx, timeout=timeout)
+    try:
+        conn.connect()
+    except ssl.SSLCertVerificationError:
+        conn.close()
+        raise TlsUntrusted(_fetch_fingerprint(hostname, port, timeout), changed=False) from None
+    if pin:
+        seen = cert_fingerprint(conn.sock.getpeercert(binary_form=True))
+        if seen != pin:
+            conn.close()
+            raise TlsUntrusted(seen, changed=True)
+    return conn
+
+
+def _send(host, pin, method, path, body, headers, timeout):
+    """(status, reason, parsed JSON or None) for one request over a checked connection."""
+    conn = _connect(host, pin, timeout)
+    try:
+        conn.request(method, path, body=body, headers=headers)
+        response = conn.getresponse()
+        raw = response.read()
+    finally:
+        conn.close()
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        parsed = None
+    return response.status, response.reason, parsed
 
 
 def api_request(host, endpoint, method="GET", auth=None, data=None, timeout=15):
     if not host.startswith("https://"):
         return {"error": "Host must use https://"}
-    url = f"{host}{endpoint}"
-    req = urllib.request.Request(url, method=method)
-
+    base = urllib.parse.urlparse(host).path.rstrip("/")
+    headers = {}
     if auth:
         if auth.get("token_id") and auth.get("token_secret"):
-            req.add_header(
-                "Authorization",
-                f"PVEAPIToken={auth['token_id']}={auth['token_secret']}",
-            )
+            headers["Authorization"] = f"PVEAPIToken={auth['token_id']}={auth['token_secret']}"
         elif auth.get("ticket"):
-            req.add_header("Cookie", f"PVEAuthCookie={auth['ticket']}")
+            headers["Cookie"] = f"PVEAuthCookie={auth['ticket']}"
             if auth.get("csrf"):
-                req.add_header("CSRFPreventionToken", auth["csrf"])
-
-    if method in ("POST", "DELETE", "PUT") and data is None:
-        data = b""
+                headers["CSRFPreventionToken"] = auth["csrf"]
+    if method in ("POST", "DELETE", "PUT"):
+        data = data if data is not None else b""
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
 
     try:
-        with urllib.request.urlopen(
-            req, data=data,
-            context=_get_ssl_context(auth.get("skip_tls_verify", False) if auth else False),
-            timeout=timeout,
-        ) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        try:
-            body = json.loads(e.read().decode("utf-8"))
+        status, reason, body = _send(host, (auth or {}).get("tls_fingerprint"), method,
+                                     base + endpoint, data, headers, timeout)
+    except TlsUntrusted as e:
+        return {"error": f"TLS {e}", "tls_untrusted": e.fingerprint, "tls_changed": e.changed}
+    except (OSError, http.client.HTTPException) as e:
+        return {"error": f"Connection failed: {e}"}
+    if status >= 400:
+        if isinstance(body, dict):
             if "message" in body and "error" not in body:
                 body["error"] = body["message"]
-            return body
-        except Exception:
-            return {"error": f"HTTP {e.code}: {e.reason}"}
-    except urllib.error.URLError as e:
-        return {"error": f"Connection failed: {e.reason}"}
-    except Exception as e:
-        return {"error": str(e)}
+            if "error" in body:
+                return body
+        return {"error": f"HTTP {status}: {reason}"}
+    return body if isinstance(body, dict) else {"error": "Invalid response"}
 
 
-def authenticate_password(host, username, password, skip_tls_verify=False):
+def authenticate_password(host, username, password, pin=None):
+    """A ticket for username/password, or None. Raises TlsUntrusted before the password
+    leaves this machine when the server's certificate isn't trusted."""
     # Never send a password over plain HTTP (an imported or hand-edited config
     # can bypass the check in ClusterDialog).
     if not host.lower().startswith("https://"):
         return None
-    url = f"{host}/api2/json/access/ticket"
-    data = urllib.parse.urlencode(
-        {"username": username, "password": password}
-    ).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
-
+    body = urllib.parse.urlencode({"username": username, "password": password}).encode("utf-8")
+    base = urllib.parse.urlparse(host).path.rstrip("/")
     try:
-        with urllib.request.urlopen(
-            req, context=_get_ssl_context(skip_tls_verify), timeout=15
-        ) as response:
-            res_data = json.loads(response.read().decode("utf-8"))
-            if res_data.get("data", {}).get("ticket"):
-                return {
-                    "ticket": res_data["data"]["ticket"],
-                    "csrf": res_data["data"].get("CSRFPreventionToken", ""),
-                }
-    except Exception as e:
-        import sys
-        print(f"[debug] authenticate_password failed: {type(e).__name__}",
-              file=sys.stderr)
+        _, _, res = _send(host, pin, "POST", f"{base}/api2/json/access/ticket", body,
+                          {"Content-Type": "application/x-www-form-urlencoded"}, 15)
+    except (OSError, http.client.HTTPException) as e:
+        print(f"[debug] authenticate_password failed: {type(e).__name__}", file=sys.stderr)
+        return None
+    data = (res or {}).get("data") or {}
+    if data.get("ticket"):
+        return {"ticket": data["ticket"], "csrf": data.get("CSRFPreventionToken", "")}
     return None
 
 
@@ -316,6 +361,7 @@ class ClusterDialog(tk.Toplevel):
         self.result = None
         self._pending_secret = None
         self.original_name = cluster.get("name") if cluster else None
+        self._original_host = cluster.get("host") if cluster else None
         self._get_secret_fn = get_secret_fn
 
         self.title("Edit Cluster" if cluster else "Add Cluster")
@@ -350,14 +396,19 @@ class ClusterDialog(tk.Toplevel):
         self.host_entry = tk.Entry(main, **entry_cfg)
         self.host_entry.grid(row=3, column=0, sticky="ew", pady=(0, 8), ipady=6)
 
-        self.skip_tls_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            main, text="Skip TLS verification (self-signed certificate)",
-            variable=self.skip_tls_var,
-            bg=C["base"], fg=C["subtext0"], selectcolor=C["surface0"],
-            activebackground=C["base"], activeforeground=C["text"],
-            font=(FONT, 9),
-        ).grid(row=4, column=0, sticky="w", pady=(0, 12))
+        # A self-signed certificate is confirmed on first connect and pinned (no "skip TLS")
+        self._pin = cluster.get("tls_fingerprint") if cluster else None
+        cert_row = tk.Frame(main, bg=C["base"])
+        cert_row.grid(row=4, column=0, sticky="ew", pady=(0, 12))
+        self._cert_label = tk.Label(cert_row, bg=C["base"], fg=C["subtext0"], font=(FONT, 9),
+                                    anchor="w", justify="left")
+        self._cert_label.pack(side="left", fill="x", expand=True)
+        self._forget_btn = HoverButton(
+            cert_row, text="Forget", command=self._forget_pin,
+            bg=C["surface0"], fg=C["text"], relief="flat", padx=10, pady=2,
+            hover_bg=C["surface1"], font=(FONT, 9),
+        )
+        self._show_pin()
 
         tk.Label(main, text="AUTHENTICATION", **lbl).grid(
             row=5, column=0, sticky="w", pady=(0, 4)
@@ -425,7 +476,6 @@ class ClusterDialog(tk.Toplevel):
         if cluster:
             self.name_entry.insert(0, cluster.get("name", ""))
             self.host_entry.insert(0, cluster.get("host", ""))
-            self.skip_tls_var.set(cluster.get("skip_tls_verify", False))
             self.auth_var.set(cluster.get("auth_method", "token"))
             self.token_id_entry.insert(0, cluster.get("token_id", ""))
             if self._get_secret_fn:
@@ -440,6 +490,20 @@ class ClusterDialog(tk.Toplevel):
 
         self.name_entry.focus_set()
         self.wait_window()
+
+    def _show_pin(self):
+        if self._pin:
+            self._cert_label.config(text=f"Certificate pinned: {self._pin[:23]}…")
+            self._forget_btn.pack(side="right")
+        else:
+            self._cert_label.config(
+                text="Certificate: checked by this system. A self-signed one is\n"
+                     "shown for you to confirm on first connect.")
+            self._forget_btn.pack_forget()
+
+    def _forget_pin(self):
+        self._pin = None
+        self._show_pin()
 
     def _toggle_auth(self):
         if self.auth_var.get() == "token":
@@ -477,8 +541,10 @@ class ClusterDialog(tk.Toplevel):
             "name": name, "host": host, "auth_method": auth_method,
             "token_id": self.token_id_entry.get().strip(),
             "username": self.user_entry.get().strip(),
-            "skip_tls_verify": self.skip_tls_var.get(),
         }
+        # A pin belongs to the host it was confirmed for
+        if self._pin and (self.original_name is None or host == self._original_host):
+            self.result["tls_fingerprint"] = self._pin
         self.destroy()
 
 
@@ -2660,14 +2726,14 @@ class ProxmoxSpiceManagerBase(tk.Tk):
     # ── Auth ─────────────────────────────────────────────────────────────────
     def _get_auth(self, cluster):
         name = cluster["name"]
-        skip_tls = cluster.get("skip_tls_verify", False)
+        pin = cluster.get("tls_fingerprint")
 
         if cluster["auth_method"] == "token":
             token_id = cluster.get("token_id")
             token_secret = self._platform_get_secret(name)
             if token_id and token_secret:
                 return {"token_id": token_id, "token_secret": token_secret,
-                        "skip_tls_verify": skip_tls}
+                        "tls_fingerprint": pin}
             messagebox.showerror(
                 "Auth Error",
                 "Token secret not found or could not be decrypted.",
@@ -2684,17 +2750,66 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         if not prompt.result:
             return None
 
-        auth = authenticate_password(
-            cluster["host"], cluster.get("username", "root@pam"), prompt.result,
-            skip_tls_verify=skip_tls,
-        )
+        while True:
+            try:
+                auth = authenticate_password(
+                    cluster["host"], cluster.get("username", "root@pam"), prompt.result,
+                    pin=cluster.get("tls_fingerprint"),
+                )
+                break
+            except TlsUntrusted as e:
+                # Nothing was sent yet: confirm the certificate, then log in
+                if not self._trust_certificate(cluster, e.fingerprint, e.changed):
+                    return None
         if auth:
-            auth["skip_tls_verify"] = skip_tls
+            auth["tls_fingerprint"] = cluster.get("tls_fingerprint")
             self.auth_cache[name] = auth
             return auth
 
         messagebox.showerror("Auth Failed", "Could not authenticate.", parent=self)
         return None
+
+    def _trust_certificate(self, cluster, fingerprint, changed):
+        """Show a certificate this system doesn't trust and pin it on yes (like SSH's
+        host keys). Called before any token or password was sent to that server."""
+        host = urllib.parse.urlparse(cluster["host"]).hostname
+        where = "Compare it with Proxmox: Node → System → Certificates → Fingerprint."
+        if changed:
+            ok = messagebox.askyesno(
+                "Certificate changed",
+                f"The certificate of {cluster['name']} ({host}) is not the one you trusted.\n\n"
+                "That is expected after the certificate is renewed. It is also what "
+                "someone intercepting the connection would look like.\n\n"
+                f"New SHA-256 fingerprint:\n{fingerprint}\n\n{where}\n\n"
+                "Trust the new certificate?",
+                icon="warning", default="no", parent=self,
+            )
+        else:
+            ok = messagebox.askyesno(
+                "Trust this certificate?",
+                f"{host} presents a certificate this computer doesn't trust. "
+                "Proxmox's own certificate is self-signed, so this is normal the first time.\n\n"
+                f"SHA-256 fingerprint:\n{fingerprint}\n\n{where}\n\n"
+                f"Trust it for {cluster['name']}? Nothing has been sent to the server yet.",
+                parent=self,
+            )
+        if not ok:
+            return False
+        cluster["tls_fingerprint"] = fingerprint
+        cluster.pop("skip_tls_verify", None)
+        if cluster["name"] in self.auth_cache:
+            self.auth_cache[cluster["name"]]["tls_fingerprint"] = fingerprint
+        self._save_config()
+        return True
+
+    def _certificate_refused(self, cluster, data):
+        """A refresh stopped at an untrusted certificate: ask, then reload or stay offline."""
+        if self.current_cluster is not cluster or self._closing:
+            return
+        if self._trust_certificate(cluster, data["tls_untrusted"], data["tls_changed"]):
+            self._refresh_vms()
+        else:
+            self._set_cluster_offline(cluster, "Certificate not trusted")
 
     # ── VM Refresh ───────────────────────────────────────────────────────────
     def _show_summary(self):
@@ -2716,11 +2831,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                          else f"{len(offline)} nodes offline ({', '.join(offline)})")
         if self._agent_errors:
             parts.append(f"{self._agent_errors} agent error(s)")
-        tls_off = cluster.get("skip_tls_verify", False)
-        if tls_off:
-            parts.append("⚠ TLS verification off")
-        self.status_label.config(text=" · ".join(parts),
-                                 fg=C["yellow"] if tls_off else C["subtext0"])
+        self.status_label.config(text=" · ".join(parts), fg=C["subtext0"])
 
     def _set_cluster_offline(self, cluster, message):
         self._cluster_status[cluster["name"]] = (False, None)
@@ -2753,6 +2864,10 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             with ThreadPoolExecutor(max_workers=16) as pool:
                 resources, nodes = pool.map(get, ("/api2/json/cluster/resources?type=vm",
                                                   "/api2/json/nodes"))
+                untrusted = next((r for r in (resources, nodes) if "tls_untrusted" in r), None)
+                if untrusted:
+                    self.after(0, lambda: self._certificate_refused(cluster, untrusted))
+                    return
                 error = resources.get("error") or nodes.get("error")
                 if error:
                     self.after(0, lambda: self._set_cluster_offline(cluster, f"Error: {error}"))

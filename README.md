@@ -101,7 +101,7 @@ Use Import clusters and Export clusters in the Settings menu to transfer cluster
 
 - **Linux:** Token secrets are stored in your desktop environment's keyring (GNOME Keyring, KDE Wallet, etc.) via the `keyring` Python package. They are never written to the JSON config file.
 - **Windows:** Token secrets are encrypted using Windows DPAPI (`CryptProtectData`), which ties the encryption key to your Windows user account. The encrypted blobs are stored as base64 in `connections.json`. They cannot be decrypted by another user or on another machine.
-- **SSL:** TLS certificate verification can be skipped per-cluster via the "Skip TLS verification" option (for self-signed certs, common in Proxmox). This accepts any certificate, so only use it on a network you trust. Host URLs must use `https://`; the apps refuse to save or log in to a plain `http://` URL.
+- **TLS:** Certificates signed by a CA your system trusts work as they are. Proxmox's own self-signed certificate is shown with its SHA-256 fingerprint the first time you connect; compare it with Node → System → Certificates → Fingerprint in Proxmox and confirm, and the app pins it for that cluster (like SSH host keys). After that only that certificate is accepted, and a changed one brings up a warning before anything is sent. The check happens before the API token or password leaves your machine. Host URLs must use `https://`; the apps refuse to save or log in to a plain `http://` URL.
 - **Export files** contain plaintext secrets — handle them accordingly.
 
 ## Tips

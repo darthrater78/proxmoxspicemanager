@@ -17,18 +17,26 @@ to the other where the platforms allow it.
   flat list shows each VM's node). A search box (name, ID, IP, node, pool,
   notes, OS) and All / Running / Stopped filters replace the per-column
   filters and column dragging. Sort by name, ID, address, node, pool,
-  snapshots, status or notes: Linux by clicking a column heading, Windows from
-  the Sort button; picking the same key again reverses it. Grouping and sort
+  snapshots, status or notes, by clicking a column heading or from the Sort
+  button; picking the same key again reverses it. Grouping and sort
   are saved (`group_by_node`, `vm_sort`, `vm_sort_desc`, shared by both apps).
-  Linux node headings are shaded and fold with a click. A panel on the right shows the selected VM's details,
+  Node headings are shaded bands that fold with a click. A panel on the right shows the selected VM's details,
   its notes and every action; Quick Rollback lives there as "Roll back to
   latest snapshot". Cluster editing, import and export, the debug log,
   prerequisites, the project links and (Linux) the app-menu and `.desktop`
   helpers move into a Settings menu in the sidebar. Double-click a cluster to
   edit it.
-- Windows: each VM row has its own Connect button (Start when the VM is
-  stopped). The Linux table can't hold buttons; double-click a VM, press Enter
-  or use the panel's Open SPICE console.
+- Each VM row has its own Connect button (Start when the VM is stopped), and
+  its status in colour. The Linux list is now drawn the same way as the Windows
+  one: OS badge, name over ID and pool, addresses, notes, snapshot count,
+  status and the button.
+- Loading a cluster is much faster when a node is down. Both apps skip VMs on
+  nodes Proxmox reports offline (asking about them made Proxmox wait seconds
+  before answering 595) and name those nodes under the cluster name
+  ("1 node offline (pve-daruk)"). Windows drops the per-node VM list requests,
+  which repeated what `cluster/resources` already returns. Linux fetches VM
+  configs and snapshots in parallel and fills in guest-agent addresses after
+  the list is on screen, as Windows does.
 - The checkbox column is gone. Select several VMs with Ctrl-click or
   Shift-click; actions apply to the whole selection, and Open console opens
   every running VM in it.
@@ -48,6 +56,20 @@ to the other where the platforms allow it.
 - `tools/screenshots/`: renders both apps with mock data, in every theme, for
   documentation and design review (Windows under Wine, Linux natively, both on
   Xvfb).
+
+### Security
+
+- **"Skip TLS verification" is replaced by certificate pinning.** The option
+  accepted any certificate, so anyone able to intercept the connection could
+  pose as the Proxmox server and receive the API token or password. Now a
+  certificate this system doesn't trust (Proxmox's self-signed one) is shown
+  with its SHA-256 fingerprint on first connect, and saved for that cluster
+  (`tls_fingerprint`) once you confirm it; after that only that certificate is
+  accepted. A different certificate brings up a warning with the new
+  fingerprint, defaulting to No. The check runs in the TLS handshake, before a
+  token or password is sent. Clusters that had the option on are asked once.
+  The cluster dialog shows the pinned fingerprint with a Forget button, and a
+  pin is dropped when the host changes.
 
 ### Fixed
 

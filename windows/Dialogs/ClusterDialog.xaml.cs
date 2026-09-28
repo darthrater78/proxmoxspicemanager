@@ -8,6 +8,7 @@ public partial class ClusterDialog : Window
 {
     private readonly AppConfig _config;
     private readonly ClusterConfig? _existing;
+    private string? _pin;
 
     public ClusterConfig? Result { get; private set; }
     public string? PendingSecret { get; private set; }
@@ -23,7 +24,7 @@ public partial class ClusterDialog : Window
             Title = "Edit Cluster";
             NameBox.Text = existing.Name;
             HostBox.Text = existing.Host;
-            SkipTlsCheck.IsChecked = existing.SkipTlsVerify;
+            _pin = existing.TlsFingerprint;
 
             if (existing.AuthMethod == "password")
             {
@@ -40,7 +41,22 @@ public partial class ClusterDialog : Window
             }
         }
 
+        ShowPin();
         NameBox.Focus();
+    }
+
+    private void ShowPin()
+    {
+        CertText.Text = _pin != null
+            ? $"Certificate pinned: {_pin[..Math.Min(23, _pin.Length)]}…"
+            : "Certificate: checked by this system. A self-signed one is shown for you to confirm on first connect.";
+        ForgetPinBtn.Visibility = _pin != null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnForgetPin(object sender, RoutedEventArgs e)
+    {
+        _pin = null;
+        ShowPin();
     }
 
     private void OnAuthChanged(object sender, RoutedEventArgs e)
@@ -82,7 +98,8 @@ public partial class ClusterDialog : Window
             AuthMethod = authMethod,
             TokenId = TokenIdBox.Text.Trim(),
             Username = UsernameBox.Text.Trim(),
-            SkipTlsVerify = SkipTlsCheck.IsChecked == true,
+            // A pin belongs to the host it was confirmed for
+            TlsFingerprint = _existing != null && host == _existing.Host ? _pin : null,
             TokenSecretEnc = _existing?.TokenSecretEnc,
         };
 

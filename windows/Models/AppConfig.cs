@@ -63,8 +63,10 @@ public class ClusterConfig
     [JsonPropertyName("username")]
     public string Username { get; set; } = "root@pam";
 
-    [JsonPropertyName("skip_tls_verify")]
-    public bool SkipTlsVerify { get; set; }
+    // SHA-256 of the self-signed certificate the user confirmed for this host ("AB:CD:…");
+    // null means the system's CAs decide. Replaces the old skip_tls_verify.
+    [JsonPropertyName("tls_fingerprint")]
+    public string? TlsFingerprint { get; set; }
 
     [JsonPropertyName("token_secret_enc")]
     public string? TokenSecretEnc { get; set; }

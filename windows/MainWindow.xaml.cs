@@ -215,6 +215,34 @@ public partial class MainWindow : Window
     }
 
     // ── Auth ───────────────────────────────────────────────────────────────
+    // Show a certificate this system doesn't trust and pin it on yes (like SSH's host
+    // keys). It was refused in the TLS handshake, so no token or password was sent.
+    private bool TrustCertificate(ClusterConfig cluster, string fingerprint, bool changed)
+    {
+        var host = Uri.TryCreate(cluster.Host, UriKind.Absolute, out var uri) ? uri.Host : cluster.Host;
+        const string where = "Compare it with Proxmox: Node → System → Certificates → Fingerprint.";
+        var answer = changed
+            ? MessageBox.Show(this,
+                $"The certificate of {cluster.Name} ({host}) is not the one you trusted.\n\n" +
+                "That is expected after the certificate is renewed. It is also what someone " +
+                "intercepting the connection would look like.\n\n" +
+                $"New SHA-256 fingerprint:\n{fingerprint}\n\n{where}\n\nTrust the new certificate?",
+                "Certificate changed", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+            : MessageBox.Show(this,
+                $"{host} presents a certificate this computer doesn't trust. Proxmox's own " +
+                "certificate is self-signed, so this is normal the first time.\n\n" +
+                $"SHA-256 fingerprint:\n{fingerprint}\n\n{where}\n\n" +
+                $"Trust it for {cluster.Name}? Nothing has been sent to the server yet.",
+                "Trust this certificate?", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
+        if (answer != MessageBoxResult.Yes)
+            return false;
+        cluster.TlsFingerprint = fingerprint;
+        if (_authCache.TryGetValue(cluster.Name, out var cached))
+            cached.TlsFingerprint = fingerprint;
+        SaveConfig();
+        return true;
+    }
+
     private async Task<AuthInfo?> GetAuthAsync(ClusterConfig cluster)
     {
         if (_authCache.TryGetValue(cluster.Name, out var cached))
@@ -232,7 +260,7 @@ public partial class MainWindow : Window
             {
                 TokenId = cluster.TokenId,
                 TokenSecret = secret,
-                SkipTlsVerify = cluster.SkipTlsVerify,
+                TlsFingerprint = cluster.TlsFingerprint,
             };
             _authCache[cluster.Name] = auth;
             return auth;
@@ -243,8 +271,18 @@ public partial class MainWindow : Window
         if (pwDlg.ShowDialog() != true || pwDlg.Password == null)
             return null;
 
-        var authResult = await ProxmoxApi.AuthenticatePasswordAsync(
-            cluster.Host, cluster.Username, pwDlg.Password, cluster.SkipTlsVerify);
+        AuthInfo? authResult;
+        while (true)
+        {
+            ProxmoxApi.TakeTlsFailure(cluster.Host);
+            authResult = await ProxmoxApi.AuthenticatePasswordAsync(
+                cluster.Host, cluster.Username, pwDlg.Password, cluster.TlsFingerprint);
+            // Refused in the TLS handshake, so the password wasn't sent: confirm, then log in
+            if (authResult != null || ProxmoxApi.TakeTlsFailure(cluster.Host) is not { } refused)
+                break;
+            if (!TrustCertificate(cluster, refused.Fingerprint, refused.Changed))
+                return null;
+        }
 
         if (authResult == null)
         {
@@ -284,6 +322,7 @@ public partial class MainWindow : Window
             }
 
             // Phase 1: every VM (cluster/resources) and each node's state, in parallel
+            ProxmoxApi.TakeTlsFailure(cluster.Host);  // only this refresh's refusal may prompt
             var phaseSw = DebugLogger.StartTimer("Phase 1: cluster/resources + nodes");
             var resourcesTask = ProxmoxApi.RequestAsync(
                 cluster.Host, "/api2/json/cluster/resources?type=vm", auth: auth);
@@ -294,6 +333,18 @@ public partial class MainWindow : Window
 
             var nodesJson = await nodesTask;
             var resourcesJson = await resourcesTask;
+            if ((nodesJson == null || resourcesJson == null) && ProxmoxApi.TakeTlsFailure(cluster.Host) is { } refused)
+            {
+                if (TrustCertificate(cluster, refused.Fingerprint, refused.Changed))
+                {
+                    await RefreshVmsAsync();
+                    return;
+                }
+                StatusLabel.Text = "Certificate not trusted";
+                _clusterStatus[cluster.Name] = (false, null);
+                RefreshClusterList();
+                return;
+            }
             if (nodesJson == null || !nodesJson.Value.TryGetProperty("data", out var nodesData) ||
                 resourcesJson == null || !resourcesJson.Value.TryGetProperty("data", out var resData))
             {
