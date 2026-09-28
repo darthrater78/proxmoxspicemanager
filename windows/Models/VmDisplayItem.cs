@@ -40,11 +40,15 @@ public class VmDisplayItem : INotifyPropertyChanged
     // First address, or why there is none; what the list sorts and searches by
     public string IpAddress => ShownIps.Select(a => a.Ip).FirstOrDefault() ?? IpNote;
 
+    // The list cell's input: every shown address, or the one reason there is none
+    public IReadOnlyList<string> AddressParts => ShownIps.Any()
+        ? ShownIps.Select(a => a.Ip).ToList()
+        : [IpNote.Length > 0 ? IpNote : "—"];
+
     public void RefreshAddress()
     {
         OnPropertyChanged(nameof(IpAddress));
-        OnPropertyChanged(nameof(IpOrDash));
-        OnPropertyChanged(nameof(AdapterText));
+        OnPropertyChanged(nameof(AddressParts));
     }
 
     private string _notes = "";
@@ -56,7 +60,6 @@ public class VmDisplayItem : INotifyPropertyChanged
             _notes = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(HasNotes));
-            OnPropertyChanged(nameof(Detail));
         }
     }
 
@@ -64,16 +67,7 @@ public class VmDisplayItem : INotifyPropertyChanged
     public string StatusText => Status.Length > 0
         ? CultureInfo.CurrentCulture.TextInfo.ToTitleCase(Status)
         : "Unknown";
-    // The list cell: "10.20.30.41 +2" when the VM has more addresses
-    public string IpOrDash => ShownIps.Count() is var n and > 1
-        ? $"{IpAddress} +{n - 1}"
-        : IpAddress.Length > 0 ? IpAddress : "—";
 
-    // The inspector: addresses under the adapter they're on
-    public string AdapterText => ShownIps.Any()
-        ? string.Join("\n", ShownIps.GroupBy(a => a.Adapter.Length > 0 ? a.Adapter : "adapter")
-            .SelectMany(g => g.Select(a => "  " + a.Ip).Prepend(g.Key)))
-        : IpOrDash;
     public bool HasNotes => Notes.Length > 0;
     public bool HasPool => Pool.Length > 0;
     public string PoolOrDash => HasPool ? Pool : "—";
@@ -81,9 +75,9 @@ public class VmDisplayItem : INotifyPropertyChanged
     // Set when the list isn't grouped by node, so each row says where it runs
     public static bool ShowNode { get; set; }
 
-    // Second line of a row: "101 · desktops · Daily driver", led by the node when ungrouped
+    // Second line of a row: "101 · desktops", led by the node when ungrouped
     public string Detail => string.Join(" · ",
-        new[] { ShowNode ? Node : "", VmId.ToString(), Pool, Notes }.Where(s => s.Length > 0));
+        new[] { ShowNode ? Node : "", VmId.ToString(), Pool }.Where(s => s.Length > 0));
 
     public void RefreshDetail() => OnPropertyChanged(nameof(Detail));
 

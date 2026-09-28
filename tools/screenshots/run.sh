@@ -76,7 +76,7 @@ fi
 
 # The Linux app, natively. Tk comes from the distro (python3-tk), not pip.
 if "$cache/venv/bin/python" -c 'import tkinter' 2>/dev/null; then
-    timeout 300 xvfb-run -a -s "-screen 0 1400x900x24" \
+    timeout 300 xvfb-run -a -s "-screen 0 1920x1200x24" \
         "$cache/venv/bin/python" "$here/linux/shots.py" "$repo/proxmox-spice-manager.py" "$out"
 else
     echo "skipping Linux screenshots: install python3-tk (Debian) or python3-tkinter (Fedora)" >&2

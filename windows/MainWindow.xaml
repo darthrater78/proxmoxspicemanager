@@ -12,6 +12,8 @@
 
     <Window.Resources>
         <local:NodeSummaryConverter x:Key="NodeSummary"/>
+        <local:FitAddressesConverter x:Key="FitAddresses"/>
+        <GridLength x:Key="AddressColumnWidth">118</GridLength>
         <FontFamily x:Key="Mono">Cascadia Code, Consolas</FontFamily>
 
         <!-- Stroked 16px line icon -->
@@ -398,7 +400,7 @@
                         <!-- VM list, grouped by node -->
                         <ListBox x:Name="VmList" SelectionMode="Extended" Background="Transparent" BorderThickness="0"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" Padding="0,0,8,0"
-                                 SelectionChanged="OnVmSelectionChanged" MouseDoubleClick="OnVmDoubleClick"
+                                 SelectionChanged="OnVmSelectionChanged" MouseDoubleClick="OnVmDoubleClick" SizeChanged="OnVmListResized"
                                  FocusVisualStyle="{x:Null}">
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">
@@ -471,8 +473,10 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="42"/>
-                                                <ColumnDefinition Width="*" MinWidth="120"/>
-                                                <ColumnDefinition Width="118"/>
+                                                <ColumnDefinition Width="3*" MinWidth="120"/>
+                                                <!-- Same width on every row, set by UpdateAddressColumn -->
+                                                <ColumnDefinition Width="{DynamicResource AddressColumnWidth}"/>
+                                                <ColumnDefinition Width="2*" MinWidth="60"/>
                                                 <ColumnDefinition Width="46"/>
                                                 <ColumnDefinition Width="86"/>
                                                 <ColumnDefinition Width="Auto"/>
@@ -486,24 +490,37 @@
                                                 <TextBlock x:Name="Name" Text="{Binding Name}" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}" TextTrimming="CharacterEllipsis"/>
                                                 <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="{DynamicResource ThemeSubtext0}" TextTrimming="CharacterEllipsis"/>
                                             </StackPanel>
-                                            <TextBlock Grid.Column="2" Text="{Binding IpOrDash}" FontFamily="{StaticResource Mono}" FontSize="12"
-                                                       Foreground="{DynamicResource ThemeSubtext1}" VerticalAlignment="Center"/>
-                                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" ToolTip="Snapshots">
+                                            <Border x:Name="AddressBox" Grid.Column="2" Margin="0,0,10,0">
+                                                <TextBlock FontFamily="{StaticResource Mono}" FontSize="12"
+                                                           Foreground="{DynamicResource ThemeSubtext1}" VerticalAlignment="Center">
+                                                    <TextBlock.Text>
+                                                        <MultiBinding Converter="{StaticResource FitAddresses}">
+                                                            <Binding Path="AddressParts"/>
+                                                            <Binding ElementName="AddressBox" Path="ActualWidth"/>
+                                                            <Binding RelativeSource="{RelativeSource Self}"/>
+                                                        </MultiBinding>
+                                                    </TextBlock.Text>
+                                                </TextBlock>
+                                            </Border>
+                                            <TextBlock Grid.Column="3" Text="{Binding Notes}" Foreground="{DynamicResource ThemeSubtext1}"
+                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
+                                                       ToolTip="{Binding Notes}"/>
+                                            <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" ToolTip="Snapshots">
                                                 <Path Style="{StaticResource Glyph}" Stroke="{DynamicResource ThemeOverlay1}" Data="{StaticResource IconCamera}"/>
                                                 <TextBlock Text="{Binding SnapCount}" Foreground="{DynamicResource ThemeSubtext0}" Margin="5,0,0,0"/>
                                             </StackPanel>
-                                            <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
                                                 <Ellipse x:Name="Dot" Width="8" Height="8" Fill="{DynamicResource ThemeGreen}"/>
                                                 <TextBlock x:Name="State" Text="{Binding StatusText}" Foreground="{DynamicResource ThemeGreen}" Margin="7,0,0,0"/>
                                             </StackPanel>
-                                            <Button x:Name="ConnectBtn" Grid.Column="5" Width="98" VerticalAlignment="Center" Style="{StaticResource AccentButton}" Padding="0,6"
+                                            <Button x:Name="ConnectBtn" Grid.Column="6" Width="98" VerticalAlignment="Center" Style="{StaticResource AccentButton}" Padding="0,6"
                                                     Click="OnRowConnect" ToolTip="Open SPICE console">
                                                 <StackPanel Orientation="Horizontal">
                                                     <Path Style="{StaticResource Glyph}" Data="{StaticResource IconMonitor}" Stroke="{DynamicResource ThemeOnAccent}" StrokeThickness="1.5"/>
                                                     <TextBlock Text="Connect" Margin="7,0,0,0"/>
                                                 </StackPanel>
                                             </Button>
-                                            <Button x:Name="StartBtn" Grid.Column="5" Width="98" VerticalAlignment="Center" Style="{StaticResource CmdButton}" Padding="0,5"
+                                            <Button x:Name="StartBtn" Grid.Column="6" Width="98" VerticalAlignment="Center" Style="{StaticResource CmdButton}" Padding="0,5"
                                                     HorizontalContentAlignment="Center" Click="OnRowStart" Visibility="Collapsed" ToolTip="Start this VM">
                                                 <StackPanel Orientation="Horizontal">
                                                     <Path Style="{StaticResource Glyph}" Data="{StaticResource IconPlay}"/>
@@ -566,7 +583,7 @@
                                     <TextBlock Grid.Row="0" Text="VM ID" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>
                                     <TextBlock Grid.Row="0" Grid.Column="1" x:Name="DetailId" Foreground="{DynamicResource ThemeText}"/>
                                     <TextBlock Grid.Row="1" Text="Address" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>
-                                    <TextBlock Grid.Row="1" Grid.Column="1" x:Name="DetailIp" FontFamily="{StaticResource Mono}" FontSize="12" Foreground="{DynamicResource ThemeText}" Margin="0,0,0,7"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" x:Name="DetailAddresses" Margin="0,0,0,7"/>
                                     <TextBlock Grid.Row="2" Text="Node" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>
                                     <TextBlock Grid.Row="2" Grid.Column="1" x:Name="DetailNode" Foreground="{DynamicResource ThemeText}"/>
                                     <TextBlock Grid.Row="3" Text="Pool" Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,7"/>

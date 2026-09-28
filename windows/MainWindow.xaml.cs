@@ -454,6 +454,8 @@ public partial class MainWindow : Window
                             else
                             {
                                 capturedVm.Ips = ParseAgentIps(ipJson);
+                                UpdateAddressColumn();
+                                if (GetSelectedVms() is [var only] && only == capturedVm) ShowAddresses(only);
                             }
                         });
                     }
@@ -530,6 +532,7 @@ public partial class MainWindow : Window
     // Called once a cluster's VMs are in _vmItems
     private void OnVmsLoaded(HashSet<int>? keepSelected = null)
     {
+        UpdateAddressColumn();
         UpdateListState();
         StatusLabel.Text = ClusterSummary();
         if (keepSelected is { Count: > 0 })
@@ -612,6 +615,60 @@ public partial class MainWindow : Window
         foreach (var vm in keep.Where(IsShown))
             if (!VmList.SelectedItems.Contains(vm)) VmList.SelectedItems.Add(vm);
         if (VmList.SelectedItem != null) VmList.ScrollIntoView(VmList.SelectedItem);
+    }
+
+    // ── Address column ─────────────────────────────────────────────────────
+    // Row parts besides name, address and notes: OS badge, snapshots, status,
+    // button, the row's padding and room for the scrollbar
+    private const double FixedRowWidth = 42 + 46 + 86 + 98 + 20 + 8 + 18;
+    private const double MinAddressWidth = 118, MinNameAndNotes = 120 + 60;
+
+    private void OnVmListResized(object sender, SizeChangedEventArgs e)
+    {
+        if (e.WidthChanged) UpdateAddressColumn();
+    }
+
+    // A wider window shows more of each VM's addresses, up to all of them.
+    // Every row shares the width, so the columns line up.
+    private void UpdateAddressColumn()
+    {
+        var typeface = new Typeface((FontFamily)FindResource("Mono"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+        var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var needed = _vmItems.Select(vm => new FormattedText(string.Join(", ", vm.AddressParts),
+                System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, 12,
+                Brushes.Black, pixelsPerDip).WidthIncludingTrailingWhitespace)
+            .DefaultIfEmpty(0).Max() + 12;
+        var free = VmList.ActualWidth - FixedRowWidth - MinAddressWidth - MinNameAndNotes;
+        var extra = Math.Max(0, Math.Min(needed - MinAddressWidth, free * 0.5));
+        Resources["AddressColumnWidth"] = new GridLength(MinAddressWidth + extra);
+    }
+
+    // Inspector: each adapter's name, dimmed, over its addresses
+    private void ShowAddresses(VmDisplayItem vm)
+    {
+        DetailAddresses.Children.Clear();
+        TextBlock Line(string text, bool address)
+        {
+            var tb = new TextBlock { Text = text, FontSize = address ? 12 : 11 };
+            if (address) tb.FontFamily = (FontFamily)FindResource("Mono");
+            tb.SetResourceReference(TextBlock.ForegroundProperty, address ? "ThemeText" : "ThemeSubtext0");
+            return tb;
+        }
+        var groups = vm.ShownIps.GroupBy(a => a.Adapter.Length > 0 ? a.Adapter : "Adapter").ToList();
+        if (groups.Count == 0)
+        {
+            var reason = Line(vm.AddressParts[0], false);
+            reason.FontSize = 12;
+            reason.SetResourceReference(TextBlock.ForegroundProperty, "ThemeText");
+            DetailAddresses.Children.Add(reason);
+        }
+        foreach (var (group, i) in groups.Select((g, i) => (g, i)))
+        {
+            var name = Line(group.Key, false);
+            name.Margin = new Thickness(0, i > 0 ? 6 : 0, 0, 1);
+            DetailAddresses.Children.Add(name);
+            foreach (var a in group) DetailAddresses.Children.Add(Line(a.Ip, true));
+        }
     }
 
     // A VM inside a folded node is off screen, so keys shouldn't act on it
@@ -792,7 +849,7 @@ public partial class MainWindow : Window
             InspectorState.SetResourceReference(TextElement.ForegroundProperty, single.IsRunning ? "ThemeGreen" : "ThemeOverlay1");
             OpenConsoleText.Text = "Open SPICE console";
             DetailId.Text = single.VmId.ToString();
-            DetailIp.Text = single.AdapterText;
+            ShowAddresses(single);
             DetailNode.Text = single.Node;
             DetailPool.Text = single.PoolOrDash;
             NotesBox.Text = single.Notes;
@@ -1214,6 +1271,7 @@ public partial class MainWindow : Window
         VmDisplayItem.ShowIpv6 = _config.ShowIpv6;
         SaveConfig();
         foreach (var vm in _vmItems) vm.RefreshAddress();
+        UpdateAddressColumn();
         UpdateListState();
         ApplySortAndGrouping();
         UpdateInspector();

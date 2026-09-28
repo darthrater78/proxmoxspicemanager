@@ -36,6 +36,7 @@ from pathlib import Path
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from tkinter import font as tkfont
 
 APP_ID = "proxmox-spice-manager"
 APP_VERSION = "3.0.0"
@@ -947,20 +948,16 @@ def vm_ips(vm, ipv6):
     return [(a, ip) for a, ip in vm.get("ips", []) if ipv6 or ":" not in ip]
 
 
-def vm_address(vm, ipv6):
-    """The list cell: the first address, "+N" for the rest, or why there is none."""
-    ips = vm_ips(vm, ipv6)
-    if not ips:
-        return vm.get("ip_note", "")
-    return ips[0][1] + (f" +{len(ips) - 1}" if len(ips) > 1 else "")
-
-
-def format_adapters(ips):
-    """Addresses grouped under their adapter, one per line, for the inspector."""
-    by_adapter = {}
-    for adapter, ip in ips:
-        by_adapter.setdefault(adapter or "adapter", []).append(f"  {ip}")
-    return "\n".join(line for adapter, addrs in by_adapter.items() for line in (adapter, *addrs))
+def fit_addresses(ips, width, measure):
+    """As many addresses as fit in `width` pixels, then "+N" for the rest."""
+    full = ", ".join(ips)
+    if len(ips) <= 1 or measure(full) <= width:
+        return full
+    for shown in range(len(ips) - 1, 0, -1):
+        text = f"{', '.join(ips[:shown])} +{len(ips) - shown}"
+        if measure(text) <= width:
+            return text
+    return f"{ips[0]} +{len(ips) - 1}"
 
 
 def _ip_key(vm, ipv6):
@@ -1144,6 +1141,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._sort_desc = self.config_data.get("vm_sort_desc", False)
         self._collapsed_nodes = set()
         self._show_ipv6 = bool(self.config_data.get("show_ipv6", False))
+        self._row_font = tkfont.Font(font=(FONT, 10))
         self._cluster_idx = -1
         self._cluster_status = {}      # name -> (online, vm count)
         self._loaded_cluster = None
@@ -1551,16 +1549,44 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         status = "● Running" if is_running else f"○ {vm['status'].title() or 'Unknown'}"
         self.vm_tree.insert(parent, "end", iid=iid, tags=("running" if is_running else "stopped",),
                             values=(os_badge(vm["ostype"]), vm["name"], vm["vmid"],
-                                    vm_address(vm, self._show_ipv6) or "—", vm["node"], vm["pool"] or "—",
+                                    self._address_cell(vm), vm["node"], vm["pool"] or "—",
                                     vm["snaps"], status, vm["note"]))
         self._iid_to_vm[iid] = vm
 
-    # Name and notes share what the fixed columns leave; Tk won't shrink them itself
+    def _show_addresses(self, vm):
+        """Inspector: each adapter's name, dimmed, over its addresses."""
+        frame = self._detail["ip"]
+        for child in frame.winfo_children():
+            child.destroy()
+        bg = frame["bg"]
+        by_adapter = {}
+        for adapter, ip in vm_ips(vm, self._show_ipv6):
+            by_adapter.setdefault(adapter or "Adapter", []).append(ip)
+        if not by_adapter:
+            tk.Label(frame, text=vm["ip_note"] or "—", bg=bg, fg=C["text"],
+                     font=(FONT, 10)).pack(anchor="w")
+        for i, (adapter, ips) in enumerate(by_adapter.items()):
+            tk.Label(frame, text=adapter, bg=bg, fg=C["subtext0"],
+                     font=(FONT, 9)).pack(anchor="w", pady=(6 if i else 0, 0))
+            for ip in ips:
+                tk.Label(frame, text=ip, bg=bg, fg=C["text"], font=(MONO, 9)).pack(anchor="w")
+
+    def _address_cell(self, vm):
+        """Every address that fits the column, "+N" for the rest, or why there is none."""
+        ips = [ip for _, ip in vm_ips(vm, self._show_ipv6)]
+        if not ips:
+            return vm["ip_note"] or "—"
+        width = int(self.vm_tree.column("ip", "width")) - self.CELL_PADDING
+        return fit_addresses(ips, width, self._row_font.measure)
+
+    # Name, address and notes share what the fixed columns leave; Tk won't size
+    # them itself. The address width here is its minimum.
     FIXED_WIDTHS = {"os": 40, "vmid": 48, "ip": 118, "node": 70, "pool": 78,
                     "snaps": 58, "status": 96}
     # Dropped first when the list is too narrow, so status and notes stay on screen
     OPTIONAL_COLUMNS = ("pool", "snaps", "node", "vmid", "ip")
     MIN_NAME, MIN_NOTES = 110, 80
+    CELL_PADDING = 12
 
     def _fit_columns(self):
         tree = self.vm_tree
@@ -1574,9 +1600,19 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 shown.remove(col)
         tree["displaycolumns"] = shown
         spare = width - sum(self.FIXED_WIDTHS.get(c, 0) for c in shown)
+        if "ip" in shown:
+            # A wider window shows more of each VM's addresses, up to all of them
+            needed = max((self._row_font.measure(", ".join(ip for _, ip in vm_ips(vm, self._show_ipv6)))
+                          for vm in self._vms), default=0) + self.CELL_PADDING
+            free = spare - self.MIN_NAME - self.MIN_NOTES
+            extra = max(0, min(needed - self.FIXED_WIDTHS["ip"], int(free * 0.5)))
+            tree.column("ip", width=self.FIXED_WIDTHS["ip"] + extra)
+            spare -= extra
         name = max(self.MIN_NAME, min(int(spare * 0.65), spare - self.MIN_NOTES))
         tree.column("name", width=name)
         tree.column("notes", width=max(self.MIN_NOTES, spare - name))
+        for iid, vm in self._iid_to_vm.items():
+            tree.set(iid, "ip", self._address_cell(vm))
 
     def _update_headings(self):
         for col, label in SORT_LABELS.items():
@@ -1741,9 +1777,11 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                                             ("node", "Node"), ("pool", "Pool"))):
             tk.Label(details, text=label, bg=bg, fg=C["subtext0"], font=(FONT, 10),
                      anchor="w").grid(row=row, column=0, sticky="nw", pady=(0, 6))
-            value = tk.Label(details, bg=bg, fg=C["text"], anchor="w", justify="left",
-                             font=(MONO, 9) if key == "ip" else (FONT, 10))
-            value.grid(row=row, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            if key == "ip":
+                value = tk.Frame(details, bg=bg)  # filled per VM by _show_addresses
+            else:
+                value = tk.Label(details, bg=bg, fg=C["text"], anchor="w", font=(FONT, 10))
+            value.grid(row=row, column=1, sticky="nw", padx=(12, 0), pady=(0, 6))
             self._detail[key] = value
         tk.Label(details, text="Notes", bg=bg, fg=C["subtext0"], font=(FONT, 10),
                  anchor="w").grid(row=4, column=0, sticky="w")
@@ -1811,8 +1849,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                                     fg=C["green"] if is_running else C["overlay1"])
             self._console_btn.set_text("Open SPICE console")
             self._detail["vmid"].config(text=single["vmid"])
-            ips = vm_ips(single, self._show_ipv6)
-            self._detail["ip"].config(text=format_adapters(ips) or single["ip_note"] or "—")
+            self._show_addresses(single)
             self._detail["node"].config(text=single["node"])
             self._detail["pool"].config(text=single["pool"] or "—")
             self._details.pack(fill="x", pady=(16, 0), after=self._console_btn)

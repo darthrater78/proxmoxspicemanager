@@ -87,10 +87,13 @@ to the other where the platforms allow it.
 ### Added
 
 - Both apps show every address the guest agent reports, grouped by adapter in
-  the details panel; the list shows the first one and "+N" for the rest.
-  Loopback and link-local addresses are left out. IPv6 addresses are hidden
+  the details panel. The list's Address column widens with the window and
+  shows as many as fit, with "+N" for the rest. Loopback and link-local
+  addresses are left out. IPv6 addresses are hidden
   unless Settings → "IPv6 addresses" is switched on (`show_ipv6`, shared by
   both apps).
+- Windows: notes get their own column in the VM list, instead of trailing the
+  grey second line.
 - Windows: node headings are a shaded band that folds its VMs away when
   clicked, like on Linux.
 - GitHub and Release notes links in the app header, moved out of Settings.

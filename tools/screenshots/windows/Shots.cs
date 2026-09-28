@@ -139,6 +139,15 @@ static class Program
         Call(w, "ApplySortAndGrouping");
         Pump(400);
         Capture(w, Path.Combine(outDir, "windows-state-ungrouped.png"));
+
+        // Wide window with IPv6 on: the address column grows to show every address
+        Call(w, "ToggleIpv6");
+        w.Width = 1800;
+        Pump(600);
+        Capture(w, Path.Combine(outDir, "windows-state-wide.png"));
+        w.Width = 1280;
+        Call(w, "ToggleIpv6");
+        Pump(400);
         config.GroupByNode = true;
         config.VmSort = "vmid";
         group.IsChecked = true;
@@ -187,7 +196,7 @@ static class Program
 
     static readonly VmDisplayItem[] MockVms =
     [
-        new() { VmId = 101, Name = "win11-dev", Node = "pve1", Pool = "desktops", SnapCount = 3, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.41"), ("Ethernet", "2001:db8:20::41"), ("Ethernet 2", "192.168.50.41")], OsType = "win11", Notes = "Daily driver" },
+        new() { VmId = 101, Name = "win11-dev", Node = "pve1", Pool = "desktops", SnapCount = 3, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.41"), ("Ethernet 2", "192.168.50.41"), ("Ethernet", "2001:db8:20::41")], OsType = "win11", Notes = "Daily driver" },
         new() { VmId = 102, Name = "fedora-43-ws", Node = "pve1", Pool = "desktops", SnapCount = 1, Status = "running", HasAgent = true, Ips = [("Ethernet", "10.20.30.42")], OsType = "l26", Notes = "" },
         new() { VmId = 103, Name = "ubuntu-2404-desk", Node = "pve2", Pool = "desktops", SnapCount = 0, Status = "stopped", HasAgent = true, IpNote = "", OsType = "l26", Notes = "" },
         new() { VmId = 110, Name = "kali-lab", Node = "pve2", Pool = "security", SnapCount = 5, Status = "running", HasAgent = false, IpNote = "no agent", OsType = "l26", Notes = "Testing" },

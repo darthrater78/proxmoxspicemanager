@@ -38,7 +38,7 @@ psm.save_config({
 
 VMS = [
     (101, "win11-dev", "pve1", "desktops", 3, "running",
-     [("Ethernet", "10.20.30.41"), ("Ethernet", "2001:db8:20::41"), ("Ethernet 2", "192.168.50.41")],
+     [("Ethernet", "10.20.30.41"), ("Ethernet 2", "192.168.50.41"), ("Ethernet", "2001:db8:20::41")],
      "win11"),
     (102, "fedora-43-ws", "pve1", "desktops", 1, "running", "10.20.30.42", "l26"),
     (103, "ubuntu-2404-desk", "pve2", "desktops", 0, "stopped", "", "l26"),
@@ -114,6 +114,14 @@ def run(app):
     app._toggle_grouping()
     app._sort_by("ip")
     capture(app, "linux-state-ungrouped.png")
+    # Wide window with IPv6 on: the address column grows to show every address
+    app._toggle_ipv6()
+    app.geometry("1800x760")
+    app.update()
+    capture(app, "linux-state-wide.png")
+    app.geometry("1280x760")
+    app._toggle_ipv6()
+    app.update()
     app._toggle_grouping()
     app._sort_by("vmid")
     app._collapsed_nodes.add("pve3")

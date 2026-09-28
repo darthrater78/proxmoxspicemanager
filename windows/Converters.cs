@@ -54,6 +54,34 @@ public class VmComparer(string key, bool descending, bool byNodeFirst) : ICompar
     }
 }
 
+// A row's addresses to as many as fit the column, then "+N" for the rest.
+// Values: the addresses, the column's width, and the TextBlock (for its font).
+public class FitAddressesConverter : IMultiValueConverter
+{
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (values is not [IReadOnlyList<string> { Count: > 0 } ips, double width, System.Windows.Controls.TextBlock tb])
+            return "";
+        var typeface = new System.Windows.Media.Typeface(tb.FontFamily, tb.FontStyle, tb.FontWeight, tb.FontStretch);
+        var pixelsPerDip = System.Windows.Media.VisualTreeHelper.GetDpi(tb).PixelsPerDip;
+        bool Fits(string text) => new System.Windows.Media.FormattedText(text, culture,
+            System.Windows.FlowDirection.LeftToRight, typeface, tb.FontSize,
+            System.Windows.Media.Brushes.Black, pixelsPerDip).WidthIncludingTrailingWhitespace <= width;
+
+        var full = string.Join(", ", ips);
+        if (ips.Count == 1 || Fits(full)) return full;
+        for (var shown = ips.Count - 1; shown > 0; shown--)
+        {
+            var text = $"{string.Join(", ", ips.Take(shown))} +{ips.Count - shown}";
+            if (Fits(text)) return text;
+        }
+        return $"{ips[0]} +{ips.Count - 1}";
+    }
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
 // A node group's items to "2/3 running"
 public class NodeSummaryConverter : IValueConverter
 {
