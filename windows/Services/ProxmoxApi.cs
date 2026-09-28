@@ -18,6 +18,7 @@ public class AuthInfo
     public string? Ticket { get; set; }
     public string? Csrf { get; set; }
     public string? TlsFingerprint { get; set; }
+    public DateTime Issued { get; set; } = DateTime.UtcNow;  // when the ticket was issued
 }
 
 public class ProxmoxApi

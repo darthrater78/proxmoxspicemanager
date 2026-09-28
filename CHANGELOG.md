@@ -76,6 +76,11 @@ to the other where the platforms allow it.
 
 ### Fixed
 
+- Password logins stopped working after two hours, when Proxmox's ticket
+  expired, because the apps kept using it. A ticket is now renewed after an
+  hour without asking (Proxmox accepts the current ticket in place of the
+  password), and the password is asked again only if renewal fails. API
+  token logins have no ticket and are unchanged.
 - Export files work across platforms. Both apps write the token secret as
   `token_secret` and read that, plus the older Windows exports that put the
   plaintext secret in `token_secret_enc`. A secret that is a DPAPI blob (from a

@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import ssl
 import urllib.parse
 import webbrowser
@@ -197,6 +198,11 @@ MONO = "monospace"
 
 
 
+
+# Proxmox tickets last 2 hours. A cached one is renewed after an hour (the ticket works as
+# the password for that), and one this close to expiring is dropped and the password asked.
+TICKET_RENEW_AFTER = 60 * 60
+TICKET_MAX_AGE = 110 * 60
 
 # Every Windows DPAPI blob starts with this (base64): an encrypted secret this app can't read
 DPAPI_PREFIX = "AQAAANCMnd8BFdERjHoAwE/Cl+"
@@ -2758,19 +2764,35 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             )
             return None
 
-        if name in self.auth_cache:
-            return self.auth_cache[name]
+        cached = self.auth_cache.get(name)
+        if cached:
+            age = time.monotonic() - cached["issued"]
+            if age < TICKET_RENEW_AFTER:
+                return cached
+            if age < TICKET_MAX_AGE:
+                renewed = self._password_login(cluster, cached["ticket"])
+                if renewed:
+                    DebugLogger.log(f"[Auth] Ticket for {name} renewed")
+                    return renewed
+            del self.auth_cache[name]
 
         prompt = PasswordPrompt(
             self, cluster.get("username", "root@pam"), cluster["host"]
         )
         if not prompt.result:
             return None
+        auth = self._password_login(cluster, prompt.result)
+        if auth:
+            return auth
+        messagebox.showerror("Auth Failed", "Could not authenticate.", parent=self)
+        return None
 
+    def _password_login(self, cluster, password):
+        """A ticket for the cluster's user, cached, from a password or the current ticket; or None."""
         while True:
             try:
                 auth = authenticate_password(
-                    cluster["host"], cluster.get("username", "root@pam"), prompt.result,
+                    cluster["host"], cluster.get("username", "root@pam"), password,
                     pin=cluster.get("tls_fingerprint"),
                 )
                 break
@@ -2778,13 +2800,12 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 # Nothing was sent yet: confirm the certificate, then log in
                 if not self._trust_certificate(cluster, e.fingerprint, e.changed):
                     return None
-        if auth:
-            auth["tls_fingerprint"] = cluster.get("tls_fingerprint")
-            self.auth_cache[name] = auth
-            return auth
-
-        messagebox.showerror("Auth Failed", "Could not authenticate.", parent=self)
-        return None
+        if not auth:
+            return None
+        auth["tls_fingerprint"] = cluster.get("tls_fingerprint")
+        auth["issued"] = time.monotonic()
+        self.auth_cache[cluster["name"]] = auth
+        return auth
 
     def _trust_certificate(self, cluster, fingerprint, changed):
         """Show a certificate this system doesn't trust and pin it on yes (like SSH's

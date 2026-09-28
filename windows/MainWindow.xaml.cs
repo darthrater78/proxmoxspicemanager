@@ -243,10 +243,25 @@ public partial class MainWindow : Window
         return true;
     }
 
+    // Proxmox tickets last 2 hours. A cached one is renewed after an hour (the ticket works as
+    // the password for that), and one this close to expiring is dropped and the password asked.
+    private static readonly TimeSpan TicketRenewAfter = TimeSpan.FromMinutes(60);
+    private static readonly TimeSpan TicketMaxAge = TimeSpan.FromMinutes(110);
+
     private async Task<AuthInfo?> GetAuthAsync(ClusterConfig cluster)
     {
         if (_authCache.TryGetValue(cluster.Name, out var cached))
-            return cached;
+        {
+            var age = DateTime.UtcNow - cached.Issued;
+            if (cached.Ticket == null || age < TicketRenewAfter)
+                return cached;
+            if (age < TicketMaxAge && await PasswordLoginAsync(cluster, cached.Ticket) is { } renewed)
+            {
+                DebugLogger.Log($"[Auth] Ticket for {cluster.Name} renewed");
+                return renewed;
+            }
+            _authCache.Remove(cluster.Name);
+        }
 
         if (cluster.AuthMethod == "token")
         {
@@ -271,26 +286,30 @@ public partial class MainWindow : Window
         if (pwDlg.ShowDialog() != true || pwDlg.Password == null)
             return null;
 
-        AuthInfo? authResult;
+        var authResult = await PasswordLoginAsync(cluster, pwDlg.Password);
+        if (authResult == null)
+            StatusLabel.Text = "Authentication failed.";
+        return authResult;
+    }
+
+    // A ticket for the cluster's user, cached, from a password or the current ticket; or null
+    private async Task<AuthInfo?> PasswordLoginAsync(ClusterConfig cluster, string password)
+    {
         while (true)
         {
             ProxmoxApi.TakeTlsFailure(cluster.Host);
-            authResult = await ProxmoxApi.AuthenticatePasswordAsync(
-                cluster.Host, cluster.Username, pwDlg.Password, cluster.TlsFingerprint);
+            var auth = await ProxmoxApi.AuthenticatePasswordAsync(
+                cluster.Host, cluster.Username, password, cluster.TlsFingerprint);
+            if (auth != null)
+            {
+                _authCache[cluster.Name] = auth;
+                return auth;
+            }
             // Refused in the TLS handshake, so the password wasn't sent: confirm, then log in
-            if (authResult != null || ProxmoxApi.TakeTlsFailure(cluster.Host) is not { } refused)
-                break;
-            if (!TrustCertificate(cluster, refused.Fingerprint, refused.Changed))
+            if (ProxmoxApi.TakeTlsFailure(cluster.Host) is not { } refused ||
+                !TrustCertificate(cluster, refused.Fingerprint, refused.Changed))
                 return null;
         }
-
-        if (authResult == null)
-        {
-            StatusLabel.Text = "Authentication failed.";
-            return null;
-        }
-        _authCache[cluster.Name] = authResult;
-        return authResult;
     }
 
     // ── VM Refresh ─────────────────────────────────────────────────────────
