@@ -1,14 +1,11 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
-using System.Windows;
-using System.Windows.Media;
 
 namespace ProxmoxSpiceManager.Models;
 
 public class VmDisplayItem : INotifyPropertyChanged
 {
-    private bool _isChecked;
-
     public int VmId { get; set; }
     public string Name { get; set; } = "";
     public string Node { get; set; } = "";
@@ -16,60 +13,68 @@ public class VmDisplayItem : INotifyPropertyChanged
     public int SnapCount { get; set; }
     public string Status { get; set; } = "";
     public bool HasAgent { get; set; }
+    // Proxmox "ostype" from the VM config: win11, win10, l26, ...
+    public string OsType { get; set; } = "";
+
     private string _ipAddress = "";
     public string IpAddress
     {
         get => _ipAddress;
-        set { _ipAddress = value; OnPropertyChanged(); }
+        set { _ipAddress = value; OnPropertyChanged(); OnPropertyChanged(nameof(IpOrDash)); }
     }
+
     private string _notes = "";
     public string Notes
     {
         get => _notes;
-        set { _notes = value; OnPropertyChanged(); }
-    }
-
-    public bool IsChecked
-    {
-        get => _isChecked;
-        set { _isChecked = value; OnPropertyChanged(); }
+        set
+        {
+            _notes = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasNotes));
+            OnPropertyChanged(nameof(Detail));
+        }
     }
 
     public bool IsRunning => Status.Equals("running", StringComparison.OrdinalIgnoreCase);
+    public string StatusText => Status.Length > 0
+        ? CultureInfo.CurrentCulture.TextInfo.ToTitleCase(Status)
+        : "Unknown";
+    public string IpOrDash => IpAddress.Length > 0 ? IpAddress : "—";
+    public bool HasNotes => Notes.Length > 0;
+    public bool HasPool => Pool.Length > 0;
+    public string PoolOrDash => HasPool ? Pool : "—";
 
-    public Brush StatusForeground
+    // Second line of a row: "101 · desktops · Daily driver"
+    public string Detail => string.Join(" · ",
+        new[] { VmId.ToString(), Pool, Notes }.Where(s => s.Length > 0));
+
+    public bool IsWindows => OsType.StartsWith('w');
+    public string OsBadge => OsType switch
     {
-        get
-        {
-            if (IsRunning) return (Brush)Application.Current.Resources["ThemeGreen"];
-            return (Brush)Application.Current.Resources["ThemeOverlay0"];
-        }
-    }
-
-    public Brush StatusBackground
+        "" => "VM",
+        _ when IsWindows => "WIN",
+        "l24" or "l26" => "LNX",
+        "solaris" => "SOL",
+        _ => "VM",
+    };
+    public string OsLabel => OsType switch
     {
-        get
-        {
-            var theme = Services.ThemeManager.Current;
-            if (IsRunning)
-            {
-                var c = theme.Green;
-                return new SolidColorBrush(Color.FromArgb(30, c.R, c.G, c.B));
-            }
-            var s = theme.Surface1;
-            return new SolidColorBrush(Color.FromArgb(80, s.R, s.G, s.B));
-        }
-    }
-
-    public FontWeight StatusFontWeight => IsRunning ? FontWeights.Bold : FontWeights.Normal;
-
-    public Brush RowForeground => IsRunning
-        ? (Brush)Application.Current.Resources["ThemeText"]
-        : (Brush)Application.Current.Resources["ThemeOverlay0"];
-
-    public Brush NameForeground => IsRunning
-        ? (Brush)Application.Current.Resources["ThemeBlue"]
-        : (Brush)Application.Current.Resources["ThemeOverlay0"];
+        "win11" => "Windows 11",
+        "win10" => "Windows 10",
+        "win8" => "Windows 8",
+        "win7" => "Windows 7",
+        "w2k8" => "Windows Server 2008",
+        "w2k3" => "Windows Server 2003",
+        "w2k" => "Windows 2000",
+        "wvista" => "Windows Vista",
+        "wxp" => "Windows XP",
+        "l24" or "l26" => "Linux",
+        "solaris" => "Solaris",
+        "other" => "Other OS",
+        "" => "Unknown OS",
+        _ => OsType,
+    };
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)

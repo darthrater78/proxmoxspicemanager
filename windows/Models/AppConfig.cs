@@ -13,6 +13,9 @@ public class AppConfig
     [JsonPropertyName("theme")]
     public string Theme { get; set; } = "Catppuccin Mocha";
 
+    [JsonPropertyName("accent")]
+    public string Accent { get; set; } = Themes.DefaultAccent;
+
     [JsonPropertyName("column_order")]
     public List<string>? ColumnOrder { get; set; }
 

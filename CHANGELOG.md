@@ -8,6 +8,35 @@ From 3.0.0 on, the Windows app and the Linux script share one version number
 and ship in the same GitHub release. A change made on one platform is carried
 to the other where the platforms allow it.
 
+## [Unreleased]
+
+### Changed
+
+- **Windows: redesigned main window.** VMs are grouped by node with a running
+  count per node, and each row has its own Connect button (Start when the VM is
+  stopped). A search box (matches name, ID, IP, node, pool, notes and OS) and
+  All / Running / Stopped filters replace the per-column filter popups. A panel
+  on the right shows the selected VM's details, its notes and every action;
+  Quick Rollback lives there as "Roll back to latest snapshot". Cluster editing,
+  import and export, the debug log, prerequisites, the Start Menu shortcut and
+  the project links move into a Settings menu in the sidebar. Double-click a
+  cluster to edit it.
+- Windows: the checkbox column is gone. Select several VMs with Ctrl-click or
+  Shift-click; actions apply to the whole selection.
+- Windows: starting a VM no longer asks for confirmation. Shut down, reboot and
+  force stop still do.
+
+### Added
+
+- Windows: keyboard shortcuts. Enter opens the console, S starts, Shift+S shuts
+  down, R reboots, P opens snapshots, Ctrl+. force stops, / jumps to search and
+  F5 refreshes. Each button shows its key.
+- Windows: accent colours. Orange is the default; Blue, Teal, Green, Purple, Red
+  and Yellow are presets that take each theme's own shade. Theme and accent are
+  picked from the Appearance button next to Settings. Text on the accent colour
+  switches between dark and light for contrast. Saved as `accent` in the config.
+- Windows: an OS badge and name per VM, read from the VM's `ostype`.
+
 ## [3.0.0] - 2026-09-27
 
 ### Changed

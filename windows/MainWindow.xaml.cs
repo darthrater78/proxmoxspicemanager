@@ -2,14 +2,14 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Net;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
-using System.Windows.Media;
+using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using ProxmoxSpiceManager.Models;
 using ProxmoxSpiceManager.Services;
 
@@ -23,10 +23,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, AuthInfo> _authCache = new();
     private ObservableCollection<VmDisplayItem> _vmItems = [];
     private ICollectionView? _vmView;
-    private readonly Dictionary<string, string> _activeFilters = new();
-
-    // Exposed for XAML binding
-    public List<string> NoteOptionsList => _config.NoteOptions ?? [];
+    private string? _loadedClusterName;
 
     // Single source of truth for the version is <Version> in the csproj.
     private static readonly string AppVersion =
@@ -36,24 +33,22 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Title = $"Proxmox SPICE Manager v{AppVersion}";
-        TitleText.Text = Title;
+        VersionText.Text = $"for Proxmox VE · v{AppVersion}";
         _config = ConfigService.Load();
         _config.NoteOptions ??= [];
         _config.VmNotes ??= new Dictionary<string, string>();
         ConfigService.MigrateSecrets(_config);
 
-        ThemeCombo.ItemsSource = Themes.All.Keys.ToList();
-        ThemeCombo.SelectedItem = _config.Theme;
-
-        VmGrid.ItemsSource = _vmItems;
+        VmList.ItemsSource = _vmItems;
         _vmView = CollectionViewSource.GetDefaultView(_vmItems);
         _vmView.Filter = VmFilterPredicate;
-
-        // Right-click on column headers — use Preview (tunneling) so it fires before DataGrid swallows it
-        VmGrid.PreviewMouseRightButtonUp += OnColumnHeaderRightClick;
+        _vmView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VmDisplayItem.Node)));
+        _vmView.SortDescriptions.Add(new SortDescription(nameof(VmDisplayItem.Node), ListSortDirection.Ascending));
+        _vmView.SortDescriptions.Add(new SortDescription(nameof(VmDisplayItem.VmId), ListSortDirection.Ascending));
 
         RefreshClusterList();
-        UpdateDebugLogUi();
+        UpdateListState();
+        UpdateInspector();
 
         if (_config.Clusters.Count > 0)
         {
@@ -69,14 +64,58 @@ public partial class MainWindow : Window
         ConfigService.Save(_config);
     }
 
-    // ── Theme ──────────────────────────────────────────────────────────────
-    private void OnThemeChanged(object sender, SelectionChangedEventArgs e)
+    // ── Appearance ─────────────────────────────────────────────────────────
+    private void OnOpenAppearance(object sender, RoutedEventArgs e)
     {
-        if (ThemeCombo.SelectedItem is not string themeName) return;
-        _config.Theme = themeName;
-        ThemeManager.Apply(themeName);
+        RefreshAppearanceChoices();
+        // Line the flyout up with the sidebar rather than with the small button
+        AppearancePopup.HorizontalOffset = -AppearanceBtn.TranslatePoint(new Point(0, 0), this).X;
+        AppearancePopup.IsOpen = true;
+    }
+
+    private void RefreshAppearanceChoices()
+    {
+        ThemeChoices.ItemsSource = Themes.All.Values.Select(t => new ThemeChoice
+        {
+            Name = t.Name,
+            Crust = new SolidColorBrush(t.Crust),
+            Base = new SolidColorBrush(t.Base),
+            Surface = new SolidColorBrush(t.Surface1),
+            Text = new SolidColorBrush(t.Subtext0),
+            Accent = new SolidColorBrush(Themes.AccentColor(t, ThemeManager.CurrentAccent)),
+            IsSelected = t.Name == ThemeManager.Current.Name,
+        }).ToList();
+        AccentChoices.ItemsSource = Themes.Accents.Keys.Select(a => new AccentChoice
+        {
+            Name = a,
+            Brush = new SolidColorBrush(Themes.AccentColor(ThemeManager.Current, a)),
+            IsSelected = a == ThemeManager.CurrentAccent,
+        }).ToList();
+        AccentName.Text = ThemeManager.CurrentAccent == Themes.DefaultAccent
+            ? $"{Themes.DefaultAccent} (default)"
+            : ThemeManager.CurrentAccent;
+    }
+
+    private void OnThemeChoice(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not ThemeChoice choice) return;
+        _config.Theme = choice.Name;
+        ApplyAppearance();
+    }
+
+    private void OnAccentChoice(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not AccentChoice choice) return;
+        _config.Accent = choice.Name;
+        ApplyAppearance();
+    }
+
+    private void ApplyAppearance()
+    {
+        ThemeManager.Apply(_config.Theme, _config.Accent);
         SaveConfig();
         RefreshClusterList();
+        RefreshAppearanceChoices();
     }
 
     // ── Cluster List ───────────────────────────────────────────────────────
@@ -101,12 +140,13 @@ public partial class MainWindow : Window
 
     private void OnClusterClick(object sender, MouseButtonEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is ClusterListItem item)
-        {
-            _selectedClusterIdx = item.Index;
-            RefreshClusterList();
+        if (sender is not FrameworkElement fe || fe.DataContext is not ClusterListItem item) return;
+        _selectedClusterIdx = item.Index;
+        RefreshClusterList();
+        if (e.ClickCount == 2)
+            EditCluster();
+        else
             _ = RefreshVmsAsync();
-        }
     }
 
     private void OnAddCluster(object sender, RoutedEventArgs e)
@@ -124,7 +164,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnEditCluster(object sender, RoutedEventArgs e)
+    private void EditCluster()
     {
         if (_selectedClusterIdx < 0 || _selectedClusterIdx >= _config.Clusters.Count) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
@@ -141,7 +181,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnRemoveCluster(object sender, RoutedEventArgs e)
+    private void RemoveCluster()
     {
         if (_selectedClusterIdx < 0 || _selectedClusterIdx >= _config.Clusters.Count) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
@@ -156,7 +196,16 @@ public partial class MainWindow : Window
 
         _selectedClusterIdx = Math.Min(_selectedClusterIdx, _config.Clusters.Count - 1);
         _vmItems.Clear();
+        _loadedClusterName = null;
         RefreshClusterList();
+        UpdateListState();
+        if (_selectedClusterIdx >= 0)
+            _ = RefreshVmsAsync();
+        else
+        {
+            ClusterTitle.Text = "No cluster";
+            StatusLabel.Text = "Add a cluster to get started";
+        }
     }
 
     // ── Auth ───────────────────────────────────────────────────────────────
@@ -207,6 +256,13 @@ public partial class MainWindow : Window
             return;
 
         var cluster = _config.Clusters[_selectedClusterIdx];
+        ClusterTitle.Text = cluster.Name;
+        if (_loadedClusterName != cluster.Name)
+        {
+            // Don't leave another cluster's VMs on screen under this cluster's name
+            _vmItems.Clear();
+            UpdateListState();
+        }
         StatusLabel.Text = $"Loading VMs from {cluster.Name}...";
         var totalSw = DebugLogger.StartTimer($"RefreshVmsAsync for {cluster.Name}");
 
@@ -295,11 +351,12 @@ public partial class MainWindow : Window
             var configResults = await Task.WhenAll(configTasks);
             DebugLogger.StopTimer(phaseSw, $"Phase 3: VM configs ({vmEntries.Count} VMs)");
 
-            var spiceVms = new List<(int vmid, string name, string status, string nodeName, string pool, bool hasAgent)>();
+            var spiceVms = new List<(int vmid, string name, string status, string nodeName, string pool, bool hasAgent, string osType)>();
             for (int i = 0; i < vmEntries.Count; i++)
             {
                 bool hasSpice = false;
                 bool hasAgent = false;
+                string osType = "";
                 if (configResults[i]?.TryGetProperty("data", out var cfgData) == true)
                 {
                     foreach (var prop in cfgData.EnumerateObject())
@@ -310,10 +367,12 @@ public partial class MainWindow : Window
                         if (prop.Name == "agent" &&
                             prop.Value.GetString()?.StartsWith("1") == true)
                             hasAgent = true;
+                        if (prop.Name == "ostype")
+                            osType = prop.Value.GetString() ?? "";
                     }
                 }
                 if (hasSpice) spiceVms.Add((vmEntries[i].vmid, vmEntries[i].name,
-                    vmEntries[i].status, vmEntries[i].nodeName, vmEntries[i].pool, hasAgent));
+                    vmEntries[i].status, vmEntries[i].nodeName, vmEntries[i].pool, hasAgent, osType));
             }
 
             DebugLogger.Log($"[Refresh] {spiceVms.Count} SPICE-enabled VMs found");
@@ -349,19 +408,23 @@ public partial class MainWindow : Window
                     Status = e.status,
                     SnapCount = snapCount,
                     HasAgent = e.hasAgent,
+                    OsType = e.osType,
                     IpAddress = e.hasAgent ? "" : "no agent",
                     Notes = LookupVmNote(e.vmid) ?? "",
                 });
             }
 
+            // Keep the selection across the reload so actions can be followed up
+            var keepSelected = GetSelectedVms().Select(v => v.VmId).ToHashSet();
             _vmItems.Clear();
             foreach (var vm in vms.OrderBy(v => v.VmId))
                 _vmItems.Add(vm);
+            _loadedClusterName = cluster.Name;
 
             _clusterStatus[cluster.Name] = (true, vms.Count);
             RefreshClusterList();
             DebugLogger.StopTimer(totalSw, $"RefreshVmsAsync for {cluster.Name} — {vms.Count} SPICE VMs");
-            StatusLabel.Text = $"{vms.Count} SPICE-enabled VM(s) on {cluster.Name}";
+            OnVmsLoaded(keepSelected);
 
             // Phase 4b: Fetch guest-agent IPs in background — only for running VMs with agent enabled
             var runningVms = _vmItems.Where(v => v.IsRunning && v.HasAgent).ToList();
@@ -408,7 +471,7 @@ public partial class MainWindow : Window
                     Dispatcher.InvokeAsync(() =>
                     {
                         if (errorCount > 0)
-                            StatusLabel.Text = $"{vms.Count} SPICE VM(s) on {cluster.Name} — {errorCount} agent error(s)";
+                            StatusLabel.Text = $"{ClusterSummary()} · {errorCount} agent error(s)";
                     });
                 });
             }
@@ -450,22 +513,235 @@ public partial class MainWindow : Window
 
     private void OnRefresh(object sender, RoutedEventArgs e) => _ = RefreshVmsAsync();
 
-    // ── VM Actions ─────────────────────────────────────────────────────────
-    private List<VmDisplayItem> GetSelectedVms()
+    // ── List state: counts, filters, summary ──────────────────────────────
+    // Called once a cluster's VMs are in _vmItems
+    private void OnVmsLoaded(HashSet<int>? keepSelected = null)
     {
-        var visible = (_vmView?.OfType<VmDisplayItem>() ?? _vmItems).ToHashSet();
-        var checked_ = _vmItems.Where(v => v.IsChecked && visible.Contains(v)).ToList();
-        if (checked_.Count > 0) return checked_;
-
-        if (VmGrid.SelectedItem is VmDisplayItem selected)
-            return [selected];
-
-        return [];
+        UpdateListState();
+        StatusLabel.Text = ClusterSummary();
+        if (keepSelected is { Count: > 0 })
+        {
+            foreach (var vm in _vmView?.OfType<VmDisplayItem>() ?? [])
+                if (keepSelected.Contains(vm.VmId))
+                    VmList.SelectedItems.Add(vm);
+        }
+        if (VmList.SelectedItems.Count == 0)
+            VmList.SelectedItem = _vmView?.OfType<VmDisplayItem>().FirstOrDefault();
     }
 
-    private async Task VmActionAsync(string action, string confirmMsg)
+    private string ClusterSummary()
     {
+        var nodes = _vmItems.Select(v => v.Node).Distinct().Count();
+        var parts = new List<string>
+        {
+            _vmItems.Count == 1 ? "1 SPICE VM" : $"{_vmItems.Count} SPICE VMs",
+            nodes == 1 ? "1 node" : $"{nodes} nodes",
+        };
+        if (_selectedClusterIdx >= 0 && _selectedClusterIdx < _config.Clusters.Count &&
+            Uri.TryCreate(_config.Clusters[_selectedClusterIdx].Host, UriKind.Absolute, out var uri))
+            parts.Add(uri.Host);
+        return string.Join(" · ", parts);
+    }
+
+    private void UpdateListState()
+    {
+        var running = _vmItems.Count(v => v.IsRunning);
+        FilterAll.Content = $"All  {_vmItems.Count}";
+        FilterRunning.Content = $"Running  {running}";
+        FilterStopped.Content = $"Stopped  {_vmItems.Count - running}";
+        _vmView?.Refresh();
+        var visible = _vmView?.OfType<VmDisplayItem>().Any() == true;
+        EmptyText.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        EmptyText.Text = _vmItems.Count == 0
+            ? (_selectedClusterIdx < 0 ? "Add a cluster to see its VMs" : "No SPICE VMs loaded")
+            : "No VMs match the filter";
+    }
+
+    private bool VmFilterPredicate(object obj)
+    {
+        if (obj is not VmDisplayItem vm) return false;
+        if (FilterRunning.IsChecked == true && !vm.IsRunning) return false;
+        if (FilterStopped.IsChecked == true && vm.IsRunning) return false;
+
+        var q = SearchBox.Text.Trim();
+        if (q.Length == 0) return true;
+        return new[] { vm.Name, vm.VmId.ToString(), vm.IpAddress, vm.Node, vm.Pool, vm.Notes, vm.OsLabel }
+            .Any(f => f.Contains(q, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void OnFilterChanged(object sender, RoutedEventArgs e)
+    {
+        if (IsLoaded) UpdateListState();
+    }
+
+    private void OnSearchChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateSearchHint();
+        UpdateListState();
+    }
+
+    private void OnSearchFocus(object sender, KeyboardFocusChangedEventArgs e) => UpdateSearchHint();
+
+    private void UpdateSearchHint()
+    {
+        var empty = SearchBox.Text.Length == 0;
+        SearchHint.Visibility = empty && !SearchBox.IsKeyboardFocused ? Visibility.Visible : Visibility.Collapsed;
+        SearchKey.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ── Keyboard ───────────────────────────────────────────────────────────
+    private void OnWindowKeyDown(object sender, KeyEventArgs e)
+    {
+        var mods = Keyboard.Modifiers;
+        if (e.Key == Key.F5)
+        {
+            _ = RefreshVmsAsync();
+            e.Handled = true;
+            return;
+        }
+
+        if (Keyboard.FocusedElement is TextBox box)
+        {
+            if (box == SearchBox && e.Key is Key.Escape or Key.Enter or Key.Down)
+            {
+                if (e.Key == Key.Escape) SearchBox.Clear();
+                FocusList();
+                e.Handled = true;
+            }
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case Key.Oem2 or Key.Divide when mods == ModifierKeys.None:
+                SearchBox.Focus();
+                break;
+            case Key.Enter when mods == ModifierKeys.None:
+                _ = LaunchAsync(GetSelectedVms());
+                break;
+            case Key.S when mods == ModifierKeys.None:
+                OnStartVm(this, e);
+                break;
+            case Key.S when mods == ModifierKeys.Shift:
+                OnShutdownVm(this, e);
+                break;
+            case Key.R when mods == ModifierKeys.None:
+                OnRebootVm(this, e);
+                break;
+            case Key.P when mods == ModifierKeys.None:
+                OnSnapshots(this, e);
+                break;
+            case Key.OemPeriod when mods == ModifierKeys.Control:
+                OnForceStopVm(this, e);
+                break;
+            default:
+                return;
+        }
+        e.Handled = true;
+    }
+
+    private void FocusList()
+    {
+        if (VmList.SelectedItem == null)
+            VmList.SelectedItem = _vmView?.OfType<VmDisplayItem>().FirstOrDefault();
+        if (VmList.SelectedItem != null &&
+            VmList.ItemContainerGenerator.ContainerFromItem(VmList.SelectedItem) is ListBoxItem item)
+            item.Focus();
+        else
+            VmList.Focus();
+    }
+
+    // ── Selection and inspector ────────────────────────────────────────────
+    private List<VmDisplayItem> GetSelectedVms()
+    {
+        var selected = VmList.SelectedItems.OfType<VmDisplayItem>().ToHashSet();
+        // In list order, not click order
+        return (_vmView?.OfType<VmDisplayItem>() ?? _vmItems).Where(selected.Contains).ToList();
+    }
+
+    private void OnVmSelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateInspector();
+
+    private void UpdateInspector()
+    {
+        // Save an edit in progress to the VM it was typed for, before the panel moves on
+        CommitNote();
         var vms = GetSelectedVms();
+        InspectorEmpty.Visibility = vms.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        InspectorPanel.Visibility = vms.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (vms.Count == 0) return;
+
+        var running = vms.Count(v => v.IsRunning);
+        var single = vms.Count == 1 ? vms[0] : null;
+        InspectorDetails.Visibility = single != null ? Visibility.Visible : Visibility.Collapsed;
+        SnapshotsBtn.IsEnabled = single != null;
+        RollbackBtn.IsEnabled = single is { SnapCount: > 0 };
+        OpenConsoleBtn.IsEnabled = running > 0;
+
+        if (single != null)
+        {
+            InspectorCaption.Text = "Selected";
+            InspectorName.Text = single.Name;
+            InspectorOs.Text = single.OsLabel;
+            InspectorSep.Text = " · ";
+            InspectorState.Text = single.StatusText;
+            // A resource reference, so it follows theme changes
+            InspectorState.SetResourceReference(TextElement.ForegroundProperty, single.IsRunning ? "ThemeGreen" : "ThemeOverlay1");
+            OpenConsoleText.Text = "Open SPICE console";
+            DetailId.Text = single.VmId.ToString();
+            DetailIp.Text = single.IpOrDash;
+            DetailNode.Text = single.Node;
+            DetailPool.Text = single.PoolOrDash;
+            NotesBox.Text = single.Notes;
+            NotesBox.Tag = single;
+        }
+        else
+        {
+            InspectorCaption.Text = "Selection";
+            InspectorName.Text = $"{vms.Count} VMs";
+            InspectorOs.Text = $"{running} running";
+            InspectorSep.Text = " · ";
+            InspectorState.Text = $"{vms.Count - running} stopped";
+            InspectorState.SetResourceReference(TextElement.ForegroundProperty, "ThemeSubtext0");
+            OpenConsoleText.Text = running == 1 ? "Open 1 console" : $"Open {running} consoles";
+            NotesBox.Tag = null;
+        }
+    }
+
+    private void OnVmDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        // Only a double-click on a row itself, not on its buttons or the empty space below
+        if (e.OriginalSource is not DependencyObject src ||
+            ItemsControl.ContainerFromElement(VmList, src) is not ListBoxItem { DataContext: VmDisplayItem vm } ||
+            FindParent<ButtonBase>(src) != null)
+            return;
+        _ = LaunchAsync([vm]);
+    }
+
+    private static T? FindParent<T>(DependencyObject child) where T : DependencyObject
+    {
+        for (var node = child; node != null; node = VisualTreeHelper.GetParent(node))
+            if (node is T t) return t;
+        return null;
+    }
+
+    private void OnRowConnect(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not VmDisplayItem vm) return;
+        VmList.SelectedItem = vm;
+        _ = LaunchAsync([vm]);
+    }
+
+    private void OnRowStart(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not VmDisplayItem vm) return;
+        VmList.SelectedItem = vm;
+        _ = VmActionAsync([vm], "start", null);
+    }
+
+    // ── VM Actions ─────────────────────────────────────────────────────────
+    // confirmMsg null: act without asking (starting a VM loses nothing)
+    private async Task VmActionAsync(List<VmDisplayItem> vms, string action, string? confirmMsg)
+    {
         if (vms.Count == 0)
         {
             MessageBox.Show("Select one or more VMs first.", "No Selection",
@@ -473,7 +749,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (MessageBox.Show(confirmMsg, "Confirm", MessageBoxButton.YesNo,
+        if (confirmMsg != null && MessageBox.Show(confirmMsg, "Confirm", MessageBoxButton.YesNo,
             MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
 
@@ -488,31 +764,54 @@ public partial class MainWindow : Window
             await ProxmoxApi.RequestAsync(cluster.Host, endpoint, "POST", auth);
         }
 
-        StatusLabel.Text = $"{action} sent to {vms.Count} VM(s). Refreshing...";
+        StatusLabel.Text = vms.Count == 1
+            ? $"{action} sent to {vms[0].Name}. Refreshing..."
+            : $"{action} sent to {vms.Count} VMs. Refreshing...";
         await Task.Delay(3000);
         await RefreshVmsAsync();
     }
 
+    private static string Names(List<VmDisplayItem> vms) =>
+        vms.Count == 1 ? vms[0].Name : $"{vms.Count} VMs";
+
     private void OnStartVm(object sender, RoutedEventArgs e)
-        => _ = VmActionAsync("start", "Start selected VM(s)?");
+        => _ = VmActionAsync(GetSelectedVms(), "start", null);
 
     private void OnShutdownVm(object sender, RoutedEventArgs e)
-        => _ = VmActionAsync("shutdown", "Send ACPI shutdown to selected VM(s)?");
-
-    private void OnRebootVm(object sender, RoutedEventArgs e)
-        => _ = VmActionAsync("reboot", "Reboot selected VM(s)?");
-
-    private void OnForceStopVm(object sender, RoutedEventArgs e)
-        => _ = VmActionAsync("stop", "Force stop selected VM(s)?\nUnsaved data will be lost.");
-
-    // ── SPICE Launch ───────────────────────────────────────────────────────
-    private async void OnLaunchSpice(object sender, RoutedEventArgs e)
     {
         var vms = GetSelectedVms();
+        _ = VmActionAsync(vms, "shutdown", $"Send ACPI shutdown to {Names(vms)}?");
+    }
+
+    private void OnRebootVm(object sender, RoutedEventArgs e)
+    {
+        var vms = GetSelectedVms();
+        _ = VmActionAsync(vms, "reboot", $"Reboot {Names(vms)}?");
+    }
+
+    private void OnForceStopVm(object sender, RoutedEventArgs e)
+    {
+        var vms = GetSelectedVms();
+        _ = VmActionAsync(vms, "stop", $"Force stop {Names(vms)}?\nUnsaved data will be lost.");
+    }
+
+    // ── SPICE Launch ───────────────────────────────────────────────────────
+    private void OnLaunchSpice(object sender, RoutedEventArgs e) => _ = LaunchAsync(GetSelectedVms());
+
+    private async Task LaunchAsync(List<VmDisplayItem> vms)
+    {
         if (vms.Count == 0)
         {
             MessageBox.Show("Select a VM to launch.", "No Selection",
                 MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var running = vms.Where(v => v.IsRunning).ToList();
+        if (running.Count == 0)
+        {
+            StatusLabel.Text = vms.Count == 1
+                ? $"{vms[0].Name} is not running. Start it first (S)."
+                : "None of the selected VMs are running.";
             return;
         }
 
@@ -529,7 +828,7 @@ public partial class MainWindow : Window
         var auth = await GetAuthAsync(cluster);
         if (auth == null) return;
 
-        foreach (var vm in vms.Where(v => v.IsRunning))
+        foreach (var vm in running)
         {
             StatusLabel.Text = $"Requesting SPICE proxy for {vm.Name}...";
 
@@ -548,7 +847,7 @@ public partial class MainWindow : Window
             foreach (var prop in data.EnumerateObject())
             {
                 var key = prop.Name.Replace("_", "-");
-                var val = prop.Value.ValueKind == System.Text.Json.JsonValueKind.Number
+                var val = prop.Value.ValueKind == JsonValueKind.Number
                     ? prop.Value.GetRawText()
                     : prop.Value.GetString() ?? "";
                 vvContent += $"{key}={val}\n";
@@ -560,31 +859,6 @@ public partial class MainWindow : Window
             ViewerService.LaunchSpice(viewer, vvPath);
             StatusLabel.Text = $"Launched SPICE session for {vm.Name}";
         }
-    }
-
-    private void OnNameDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ClickCount == 2 && sender is FrameworkElement fe &&
-            fe.DataContext is VmDisplayItem vm && vm.IsRunning)
-        {
-            OnLaunchSpice(sender, new RoutedEventArgs());
-        }
-    }
-
-    private void OnVmSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        var count = _vmItems.Count(v => v.IsChecked);
-        CheckCountLabel.Text = count > 0 ? $"{count} checked" : "";
-    }
-
-    private void OnSelectAllCheckBox(object sender, RoutedEventArgs e)
-    {
-        if (sender is not System.Windows.Controls.CheckBox cb) return;
-        bool check = cb.IsChecked == true;
-        foreach (var item in _vmView?.OfType<VmDisplayItem>() ?? [])
-            item.IsChecked = check;
-        var count = _vmItems.Count(v => v.IsChecked);
-        CheckCountLabel.Text = count > 0 ? $"{count} checked" : "";
     }
 
     // ── Snapshots ──────────────────────────────────────────────────────────
@@ -662,8 +936,82 @@ public partial class MainWindow : Window
         await RefreshVmsAsync();
     }
 
+    // ── Settings menu ──────────────────────────────────────────────────────
+    private void OnOpenSettings(object sender, RoutedEventArgs e)
+    {
+        var hasCluster = _selectedClusterIdx >= 0 && _selectedClusterIdx < _config.Clusters.Count;
+        var clusterName = hasCluster ? _config.Clusters[_selectedClusterIdx].Name : "cluster";
+        ShowMenu(SettingsBtn, PlacementMode.Top,
+        [
+            new($"Edit {clusterName}…", EditCluster, hasCluster),
+            new($"Remove {clusterName}…", RemoveCluster, hasCluster),
+            null,
+            new("Import clusters…", ImportConfig),
+            new("Export clusters…", ExportConfig),
+            null,
+            new(DebugLogger.Enabled ? "Debug log: on" : "Debug log: off", ToggleDebugLog),
+            new("Open debug log", OpenLogFile, DebugLogger.Enabled),
+            new("Check prerequisites", CheckPrereqs),
+            new("Create Start Menu shortcut", CreateShortcut),
+            null,
+            new("GitHub", () => OpenUrl("https://github.com/darthrater78/proxmoxspicemanager")),
+            new($"Release notes (v{AppVersion})", () => OpenUrl($"https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v{AppVersion}")),
+        ]);
+    }
+
+    private record MenuEntry(string Label, Action Run, bool Enabled = true);
+
+    // A themed popup menu of flat buttons; null entries are separators
+    private void ShowMenu(UIElement target, PlacementMode placement, IEnumerable<MenuEntry?> entries)
+    {
+        var popup = new Popup
+        {
+            PlacementTarget = target,
+            Placement = placement,
+            StaysOpen = false,
+            AllowsTransparency = true,
+            PopupAnimation = PopupAnimation.Fade,
+        };
+        var panel = new StackPanel { MinWidth = 220 };
+        foreach (var entry in entries)
+        {
+            if (entry == null)
+            {
+                panel.Children.Add(new Border
+                {
+                    Height = 1,
+                    Margin = new Thickness(4, 5, 4, 5),
+                    Background = (Brush)FindResource("ThemeSurface1"),
+                });
+                continue;
+            }
+            var button = new Button
+            {
+                Style = (Style)FindResource("NavButton"),
+                Content = new TextBlock { Text = entry.Label },
+                IsEnabled = entry.Enabled,
+            };
+            button.Click += (_, _) =>
+            {
+                popup.IsOpen = false;
+                entry.Run();
+            };
+            panel.Children.Add(button);
+        }
+        popup.Child = new Border
+        {
+            Style = (Style)FindResource("PopupCard"),
+            Padding = new Thickness(6),
+            Child = panel,
+        };
+        popup.IsOpen = true;
+    }
+
+    private static void OpenUrl(string url)
+        => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+
     // ── Import / Export ────────────────────────────────────────────────────
-    private void OnImport(object sender, RoutedEventArgs e)
+    private void ImportConfig()
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
@@ -702,7 +1050,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnExport(object sender, RoutedEventArgs e)
+    private void ExportConfig()
     {
         if (_config.Clusters.Count == 0)
         {
@@ -750,46 +1098,28 @@ public partial class MainWindow : Window
     }
 
     // ── Debug Logging ─────────────────────────────────────────────────────
-    private void UpdateDebugLogUi()
-    {
-        bool on = DebugLogger.Enabled;
-        DebugLogToggle.Content = on ? "Debug Log: ON" : "Debug Log: OFF";
-        DebugLogToggle.Foreground = on
-            ? (System.Windows.Media.Brush)FindResource("ThemeGreen")
-            : (System.Windows.Media.Brush)FindResource("ThemeSubtext0");
-        OpenLogBtn.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void OnToggleDebugLog(object sender, RoutedEventArgs e)
+    private void ToggleDebugLog()
     {
         bool newState = !DebugLogger.Enabled;
         DebugLogger.SetEnabled(newState);
         _config.DebugLogging = newState;
         SaveConfig();
-        UpdateDebugLogUi();
         StatusLabel.Text = newState
             ? $"Debug logging enabled — {DebugLogger.LogFilePath}"
             : "Debug logging disabled";
     }
 
-    private void OnOpenLogFile(object sender, RoutedEventArgs e)
+    private void OpenLogFile()
     {
         var path = DebugLogger.LogFilePath;
-        if (System.IO.File.Exists(path))
+        if (File.Exists(path))
             Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         else
             MessageBox.Show("No log file found yet. Trigger a refresh to generate log entries.",
                 "No Log", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    // ── Header buttons ─────────────────────────────────────────────────────
-    private void OnGitHubClick(object sender, RoutedEventArgs e)
-        => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager") { UseShellExecute = true });
-
-    private void OnReleaseNotesClick(object sender, RoutedEventArgs e)
-        => Process.Start(new ProcessStartInfo($"https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v{AppVersion}") { UseShellExecute = true });
-
-    private void OnCheckPrereqs(object sender, RoutedEventArgs e)
+    private void CheckPrereqs()
     {
         var viewer = ViewerService.FindRemoteViewer();
         if (viewer != null)
@@ -841,61 +1171,51 @@ public partial class MainWindow : Window
         SaveConfig();
     }
 
-    private void OnNotesComboLoaded(object sender, RoutedEventArgs e)
+    private void OnNotesBoxCommit(object sender, KeyboardFocusChangedEventArgs e) => CommitNote();
+
+    private void OnNotesBoxKey(object sender, KeyEventArgs e)
     {
-        if (sender is ComboBox combo)
+        if (e.Key == Key.Enter)
         {
-            combo.ItemsSource = _config.NoteOptions ?? [];
-            combo.IsDropDownOpen = true;
-            combo.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, () =>
-            {
-                var bg = (Brush)FindResource("ThemeSurface0");
-                var fg = (Brush)FindResource("ThemeText");
-                ThemeComboBoxVisualTree(combo, bg, fg);
-            });
+            CommitNote();
+            FocusList();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            if (NotesBox.Tag is VmDisplayItem vm) NotesBox.Text = vm.Notes;
+            FocusList();
+            e.Handled = true;
         }
     }
 
-    private static void ThemeComboBoxVisualTree(DependencyObject parent,
-        Brush bg, Brush fg)
+    private void CommitNote()
     {
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-        {
-            var child = VisualTreeHelper.GetChild(parent, i);
-            if (child is System.Windows.Controls.TextBox tb)
-            {
-                tb.Background = bg;
-                tb.Foreground = fg;
-                tb.CaretBrush = fg;
-            }
-            else if (child is Border border)
-            {
-                if (border.Background is SolidColorBrush scb && IsLightColor(scb.Color))
-                    border.Background = bg;
-                if (border.BorderBrush is SolidColorBrush bscb && IsLightColor(bscb.Color))
-                    border.BorderBrush = bg;
-            }
-            ThemeComboBoxVisualTree(child, bg, fg);
-        }
+        if (NotesBox.Tag is not VmDisplayItem vm) return;
+        var text = NotesBox.Text.Trim();
+        if (vm.Notes == text) return;
+        vm.Notes = text;
+        SaveVmNote(vm);
     }
 
-    private static bool IsLightColor(Color c)
-        => c.R > 200 && c.G > 200 && c.B > 200;
-
-    private void OnNotesComboLostFocus(object sender, RoutedEventArgs e)
+    private void OnNotesMenu(object sender, RoutedEventArgs e)
     {
-        if (sender is ComboBox combo && combo.DataContext is VmDisplayItem vm)
-        {
-            var newText = combo.Text?.Trim() ?? "";
-            if (vm.Notes != newText)
-            {
-                vm.Notes = newText;
-                SaveVmNote(vm);
-            }
-        }
+        var entries = new List<MenuEntry?>();
+        foreach (var option in _config.NoteOptions ?? [])
+            entries.Add(new(option, () => SetNote(option)));
+        if (entries.Count > 0) entries.Add(null);
+        entries.Add(new("Clear note", () => SetNote(""), NotesBox.Text.Length > 0));
+        entries.Add(new("Edit saved notes…", ManageNotes));
+        ShowMenu(NotesMenuBtn, PlacementMode.Bottom, entries);
     }
 
-    private void OnManageNotes(object sender, RoutedEventArgs e)
+    private void SetNote(string text)
+    {
+        NotesBox.Text = text;
+        CommitNote();
+    }
+
+    private void ManageNotes()
     {
         _config.NoteOptions ??= [];
         var dlg = new Dialogs.ManageNotesDialog(_config.NoteOptions) { Owner = this };
@@ -906,285 +1226,7 @@ public partial class MainWindow : Window
         }
     }
 
-    // ── Column Filtering ──────────────────────────────────────────────────
-    private bool VmFilterPredicate(object obj)
-    {
-        if (obj is not VmDisplayItem vm) return false;
-        foreach (var kvp in _activeFilters)
-        {
-            var val = kvp.Value;
-            if (string.IsNullOrEmpty(val)) continue;
-
-            string field = kvp.Key.ToLowerInvariant() switch
-            {
-                "name" => vm.Name,
-                "node" => vm.Node,
-                "pool" => vm.Pool,
-                "status" => vm.Status,
-                "notes" => vm.Notes,
-                _ => ""
-            };
-
-            if (kvp.Key.Equals("name", StringComparison.OrdinalIgnoreCase))
-            {
-                // Substring search for name
-                if (!field.Contains(val, StringComparison.OrdinalIgnoreCase))
-                    return false;
-            }
-            else
-            {
-                // Exact match for other columns
-                if (!field.Equals(val, StringComparison.OrdinalIgnoreCase))
-                    return false;
-            }
-        }
-        return true;
-    }
-
-    private void OnColumnHeaderRightClick(object sender, MouseButtonEventArgs e)
-    {
-        if (e.OriginalSource is not FrameworkElement fe) return;
-
-        // Walk up to find the DataGridColumnHeader
-        var header = FindParent<DataGridColumnHeader>(fe);
-        if (header?.Column == null) return;
-
-        var colName = GetColumnFieldName(header.Column);
-        if (colName == null) return;
-
-        ShowFilterPopup(header, colName);
-    }
-
-    private static T? FindParent<T>(DependencyObject child) where T : DependencyObject
-    {
-        var parent = System.Windows.Media.VisualTreeHelper.GetParent(child);
-        while (parent != null)
-        {
-            if (parent is T t) return t;
-            parent = System.Windows.Media.VisualTreeHelper.GetParent(parent);
-        }
-        return null;
-    }
-
-    private string? GetColumnFieldName(DataGridColumn col)
-    {
-        if (col is DataGridBoundColumn bound && bound.Binding is Binding b)
-            return b.Path?.Path;
-        if (col is DataGridTemplateColumn tmpl)
-        {
-            var sort = tmpl.SortMemberPath;
-            if (!string.IsNullOrEmpty(sort)) return sort;
-        }
-        // Fallback: match by header text
-        var hdr = col.Header?.ToString()?.Trim() ?? "";
-        // Strip filter indicator
-        hdr = hdr.Replace(" \U0001f53d", "");
-        return hdr.ToLowerInvariant() switch
-        {
-            "name" => "Name",
-            "node" => "Node",
-            "pool" => "Pool",
-            "status" => "Status",
-            "notes" => "Notes",
-            _ => null
-        };
-    }
-
-    private void ShowFilterPopup(DataGridColumnHeader header, string colName)
-    {
-        var popup = new Popup
-        {
-            PlacementTarget = header,
-            Placement = PlacementMode.Bottom,
-            StaysOpen = false,
-            AllowsTransparency = true,
-        };
-
-        var border = new Border
-        {
-            Background = (Brush)FindResource("ThemeSurface0"),
-            BorderBrush = (Brush)FindResource("ThemeSurface2"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(10),
-            MinWidth = 180,
-        };
-
-        var panel = new StackPanel();
-
-        var title = new TextBlock
-        {
-            Text = $"Filter: {colName.ToUpper()}",
-            Foreground = (Brush)FindResource("ThemeSubtext0"),
-            FontSize = 11,
-            FontWeight = FontWeights.Bold,
-            Margin = new Thickness(0, 0, 0, 6),
-        };
-        panel.Children.Add(title);
-
-        if (colName.Equals("Name", StringComparison.OrdinalIgnoreCase))
-        {
-            // Text input for substring search
-            var textBox = new TextBox
-            {
-                Text = _activeFilters.GetValueOrDefault(colName, ""),
-                Background = (Brush)FindResource("ThemeSurface1"),
-                Foreground = (Brush)FindResource("ThemeText"),
-                CaretBrush = (Brush)FindResource("ThemeText"),
-                BorderThickness = new Thickness(1),
-                BorderBrush = (Brush)FindResource("ThemeSurface2"),
-                Padding = new Thickness(6, 4, 6, 4),
-                FontSize = 12,
-                MinWidth = 150,
-            };
-            panel.Children.Add(textBox);
-
-            var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-
-            var applyBtn = new Button
-            {
-                Content = "Apply",
-                Padding = new Thickness(10, 4, 10, 4),
-                Background = (Brush)FindResource("ThemeBlue"),
-                Foreground = (Brush)FindResource("ThemeCrust"),
-                BorderThickness = new Thickness(0),
-                Cursor = Cursors.Hand,
-                Margin = new Thickness(0, 0, 6, 0),
-            };
-            applyBtn.Click += (_, _) =>
-            {
-                var val = textBox.Text.Trim();
-                if (string.IsNullOrEmpty(val))
-                    _activeFilters.Remove(colName);
-                else
-                    _activeFilters[colName] = val;
-                ApplyFilters();
-                UpdateColumnHeaders();
-                popup.IsOpen = false;
-            };
-            btnPanel.Children.Add(applyBtn);
-
-            var clearBtn = new Button
-            {
-                Content = "Clear",
-                Padding = new Thickness(10, 4, 10, 4),
-                Background = (Brush)FindResource("ThemeSurface1"),
-                Foreground = (Brush)FindResource("ThemeText"),
-                BorderThickness = new Thickness(0),
-                Cursor = Cursors.Hand,
-            };
-            clearBtn.Click += (_, _) =>
-            {
-                _activeFilters.Remove(colName);
-                ApplyFilters();
-                UpdateColumnHeaders();
-                popup.IsOpen = false;
-            };
-            btnPanel.Children.Add(clearBtn);
-
-            panel.Children.Add(btnPanel);
-        }
-        else
-        {
-            // ComboBox with distinct values
-            var distinctValues = _vmItems
-                .Select(vm => colName switch
-                {
-                    "Node" => vm.Node,
-                    "Pool" => vm.Pool,
-                    "Status" => vm.Status,
-                    "Notes" => vm.Notes,
-                    _ => ""
-                })
-                .Where(v => !string.IsNullOrEmpty(v))
-                .Distinct()
-                .OrderBy(v => v)
-                .ToList();
-
-            distinctValues.Insert(0, "All");
-
-            var combo = new ComboBox
-            {
-                ItemsSource = distinctValues,
-                SelectedItem = _activeFilters.ContainsKey(colName) ? _activeFilters[colName] : "All",
-                Background = (Brush)FindResource("ThemeSurface1"),
-                Foreground = (Brush)FindResource("ThemeText"),
-                BorderThickness = new Thickness(1),
-                BorderBrush = (Brush)FindResource("ThemeSurface2"),
-                FontSize = 12,
-                MinWidth = 150,
-            };
-            combo.SelectionChanged += (_, _) =>
-            {
-                if (combo.SelectedItem is string val)
-                {
-                    if (val == "All")
-                        _activeFilters.Remove(colName);
-                    else
-                        _activeFilters[colName] = val;
-                    ApplyFilters();
-                    UpdateColumnHeaders();
-                    popup.IsOpen = false;
-                }
-            };
-            panel.Children.Add(combo);
-
-            var clearBtn = new Button
-            {
-                Content = "Clear",
-                Padding = new Thickness(10, 4, 10, 4),
-                Background = (Brush)FindResource("ThemeSurface1"),
-                Foreground = (Brush)FindResource("ThemeText"),
-                BorderThickness = new Thickness(0),
-                Cursor = Cursors.Hand,
-                Margin = new Thickness(0, 8, 0, 0),
-            };
-            clearBtn.Click += (_, _) =>
-            {
-                _activeFilters.Remove(colName);
-                ApplyFilters();
-                UpdateColumnHeaders();
-                popup.IsOpen = false;
-            };
-            panel.Children.Add(clearBtn);
-        }
-
-        border.Child = panel;
-        popup.Child = border;
-        popup.IsOpen = true;
-    }
-
-    private void ApplyFilters()
-    {
-        _vmView?.Refresh();
-        ClearAllFiltersBtn.Visibility = _activeFilters.Count > 0
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-    }
-
-    private void UpdateColumnHeaders()
-    {
-        foreach (var col in VmGrid.Columns)
-        {
-            var fieldName = GetColumnFieldName(col);
-            if (fieldName == null) continue;
-
-            var baseName = fieldName.ToUpperInvariant();
-            if (_activeFilters.ContainsKey(fieldName))
-                col.Header = $"{baseName} \U0001f53d";
-            else
-                col.Header = baseName;
-        }
-    }
-
-    private void OnClearAllFilters(object sender, RoutedEventArgs e)
-    {
-        _activeFilters.Clear();
-        ApplyFilters();
-        UpdateColumnHeaders();
-    }
-
-    private void OnCreateShortcut(object sender, RoutedEventArgs e)
+    private void CreateShortcut()
     {
         try
         {

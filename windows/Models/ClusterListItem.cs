@@ -11,8 +11,8 @@ public class ClusterListItem
     public bool? Online { get; set; }
     public int? VmCount { get; set; }
 
-    public string VmCountText => VmCount?.ToString() ?? "";
-    public Visibility VmCountVisibility => VmCount.HasValue ? Visibility.Visible : Visibility.Collapsed;
+    // VM count once loaded, "offline" when the last attempt failed
+    public string CountText => Online == false ? "offline" : VmCount?.ToString() ?? "";
 
     public Brush StatusColor
     {
@@ -23,8 +23,24 @@ public class ClusterListItem
             return (Brush)Application.Current.Resources["ThemeSurface2"];
         }
     }
+}
 
-    public Brush NameColor => IsSelected
-        ? (Brush)Application.Current.Resources["ThemeBlue"]
-        : (Brush)Application.Current.Resources["ThemeText"];
+// A row of the appearance flyout's theme list
+public class ThemeChoice
+{
+    public string Name { get; init; } = "";
+    public Brush Crust { get; init; } = Brushes.Black;
+    public Brush Base { get; init; } = Brushes.Black;
+    public Brush Surface { get; init; } = Brushes.Gray;
+    public Brush Text { get; init; } = Brushes.White;
+    public Brush Accent { get; init; } = Brushes.Orange;
+    public bool IsSelected { get; init; }
+}
+
+// A swatch of the appearance flyout's accent row
+public class AccentChoice
+{
+    public string Name { get; init; } = "";
+    public Brush Brush { get; init; } = Brushes.Orange;
+    public bool IsSelected { get; init; }
 }
