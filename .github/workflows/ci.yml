@@ -34,6 +34,16 @@ jobs:
       - name: Run project checks
         run: bash scripts/check.sh
 
+      # The Linux app's test artifact for this exact commit, next to the
+      # Windows exe from the build job.
+      - name: Upload Linux script
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proxmox-spice-manager-${{ github.sha }}
+          path: proxmox-spice-manager.py
+          if-no-files-found: error
+          retention-days: 14
+
   build:
     name: Build Windows exe
     runs-on: windows-latest
