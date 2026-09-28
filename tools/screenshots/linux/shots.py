@@ -104,7 +104,7 @@ def run(app):
         capture(app, f"linux-main-{theme.lower().replace(' ', '-')}.png")
     appearance(app, psm.DEFAULT_THEME)
 
-    tree = app.vm_tree
+    tree = app.vm_list
     tree.selection_set(["vm:101", "vm:103", "vm:130"])
     capture(app, "linux-state-multiselect.png")
     app.search_var.set("win")

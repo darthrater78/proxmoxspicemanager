@@ -1065,6 +1065,475 @@ class ActionButton(tk.Frame):
         self.label.config(text=text)
 
 
+class Chip(tk.Canvas):
+    """A rounded pill: the filter chips, the IPv6 and grouping toggles, the Sort button."""
+
+    def __init__(self, master, command, chevron=False):
+        super().__init__(master, height=28, bg=master["bg"], highlightthickness=0,
+                         cursor="hand2")
+        self._command = command
+        self._chevron = chevron
+        self._fonts = {False: tkfont.Font(font=(FONT, 10)),
+                       True: tkfont.Font(font=(FONT, 10, "bold"))}
+        self._style = None
+        self._hover = False
+        self.bind("<Button-1>", lambda e: (self._command(), "break")[1])
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+
+    def _set_hover(self, hover):
+        self._hover = hover
+        self._draw()
+
+    def set(self, text, bg, fg, border, bold=False, hover_bg=None):
+        self._style = (text, bg, fg, border, bold, hover_bg or C["surface1"])
+        self._draw()
+
+    def _draw(self):
+        if self._style is None:
+            return
+        text, bg, fg, border, bold, hover_bg = self._style
+        font = self._fonts[bold]
+        width = font.measure(text) + 26 + (18 if self._chevron else 0)
+        self.delete("all")
+        self.config(width=width)
+        fill = hover_bg if self._hover and bg != C["accent"] else bg
+        round_rect(self, 1, 1, width - 1, 27, 13, fill=fill, outline=border)
+        self.create_text(13, 14, text=text, anchor="w", fill=fg, font=font)
+        if self._chevron:
+            x = width - 20
+            self.create_line(x, 12, x + 4, 16, x + 8, 12, fill=fg, width=1.4)
+
+
+def elide(text, width, font):
+    """Text cut to `width` pixels with an ellipsis, like WPF's CharacterEllipsis."""
+    if width <= 0:
+        return ""
+    if font.measure(text) <= width:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if font.measure(text[:mid].rstrip() + "…") <= width:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo].rstrip() + "…" if lo else ""
+
+
+class VmList(tk.Frame):
+    """The VM list, drawn like the Windows app's: column headings over rounded
+    rows, each with an OS badge, name and detail line, addresses, notes,
+    snapshots, a coloured status and a Connect or Start button, under
+    foldable node bands. ttk.Treeview can't colour one cell or hold a button.
+
+    Rows are ("node", name, is_open, running, total) or ("vm", iid, vm, detail).
+    """
+
+    ROW_H, BAND_H, GAP, PAD = 46, 34, 4, 10
+    FIXED = {"badge": 42, "snaps": 62, "status": 86, "button": 98}
+    MIN_ADDRESS, MIN_NAME, MIN_NOTES = 118, 120, 60
+    HEADINGS = (("name", "NAME"), ("ip", "ADDRESS"), ("notes", "NOTES"),
+                ("snaps", "SNAPS"), ("status", "STATUS"))
+
+    def __init__(self, master, app):
+        super().__init__(master, bg=C["base"])
+        self.app = app
+        self._rows = []
+        self._sel = []            # selected iids, in the order they were picked
+        self._anchor = None       # where a Shift range starts
+        self._cursor = None       # the row the arrow keys move from
+        self._hits = []           # (y1, y2, kind, key) per drawn row
+        self._items = {}          # key -> {"bg": id, "button": (id, kind), ...}
+        self._hover = None        # (kind, key)
+        self._hover_heading = None
+        self._cols = {}
+        self._address_need = 0
+        self._name_font = tkfont.Font(font=(FONT, 10, "bold"))
+        self._detail_font = tkfont.Font(font=(FONT, 8))
+        self._cell_font = tkfont.Font(font=(FONT, 10))
+        self._mono_font = tkfont.Font(font=(MONO, 9))
+        self._band_font = tkfont.Font(font=(FONT, 11, "bold"))
+        self._heading_font = tkfont.Font(font=(FONT, 8, "bold"))
+
+        self.headings = tk.Canvas(self, height=26, bg=C["base"], highlightthickness=0)
+        self.canvas = tk.Canvas(self, bg=C["base"], highlightthickness=0, takefocus=1)
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.headings.grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        self.canvas.grid(row=1, column=0, sticky="nsew")
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self.canvas.configure(yscrollcommand=self._autohide)
+
+        c = self.canvas
+        c.bind("<Configure>", lambda e: self._draw())
+        c.bind("<Button-1>", self._on_click)
+        c.bind("<Double-Button-1>", self._on_double)
+        c.bind("<Motion>", self._on_motion)
+        c.bind("<Leave>", lambda e: self._set_hover(None))
+        for seq, step in (("<Button-4>", -1), ("<Button-5>", 1)):
+            c.bind(seq, lambda e, s=step: self._scroll(s))
+        c.bind("<MouseWheel>", lambda e: self._scroll(-1 if e.delta > 0 else 1))
+        for key in ("Up", "Down", "Home", "End", "Prior", "Next"):
+            c.bind(f"<{key}>", lambda e, k=key: self._on_arrow(k, False))
+            c.bind(f"<Shift-{key}>", lambda e, k=key: self._on_arrow(k, True))
+        self.headings.bind("<Motion>", self._on_heading_motion)
+        self.headings.bind("<Leave>", lambda e: self._set_heading_hover(None))
+        self.headings.bind("<Button-1>", self._on_heading_click)
+
+    # ── Data ─────────────────────────────────────────────────────────────────
+    def set_rows(self, rows, address_need):
+        self._rows = rows
+        self._address_need = address_need
+        shown = set(self.shown())
+        self._sel = [iid for iid in self._sel if iid in shown]
+        if self._cursor not in shown:
+            self._cursor = self._sel[-1] if self._sel else None
+        if self._anchor not in shown:
+            self._anchor = self._cursor
+        self._draw()
+
+    def shown(self):
+        """VM iids on screen, in list order (VMs in folded nodes aren't drawn)."""
+        return [row[1] for row in self._rows if row[0] == "vm"]
+
+    def selection(self):
+        return list(self._sel)
+
+    def selection_set(self, iids):
+        shown = self.shown()
+        self._sel = [iid for iid in iids if iid in shown]
+        if self._sel:
+            self._cursor = self._anchor = self._sel[0]
+        self._restyle_all()
+        self.app._on_list_select()
+
+    def see(self, iid):
+        for i, (y1, y2, kind, key) in enumerate(self._hits):
+            if kind == "vm" and key == iid:
+                if i and self._hits[i - 1][2] == "node":
+                    y1 = self._hits[i - 1][0] - 6  # a node's first VM brings its band along
+                top = self.canvas.canvasy(0)
+                height = self.canvas.winfo_height()
+                total = max(self._hits[-1][1] + self.GAP, 1)
+                if y1 < top:
+                    self.canvas.yview_moveto(y1 / total)
+                elif y2 > top + height:
+                    self.canvas.yview_moveto((y2 - height + self.GAP) / total)
+                return
+
+    def focus_list(self):
+        self.canvas.focus_set()
+
+    def update_notes(self, iid):
+        if iid in self.shown():
+            self._draw()
+
+    # ── Layout ───────────────────────────────────────────────────────────────
+    def _layout(self, width):
+        """x and width of each column, the Windows grid's: fixed badge, snapshots,
+        status and button; name and notes share 3:2 what the address leaves.
+        Too narrow for all of them, notes go first, then snapshots, then address."""
+        inner = width - 2 * (self.PAD + 1)
+        cols = ["badge", "name", "ip", "notes", "snaps", "status", "button"]
+        for drop in (None, "notes", "snaps", "ip"):
+            if drop:
+                cols.remove(drop)
+            need = (sum(self.FIXED.get(c, 0) for c in cols) + self.MIN_NAME
+                    + (self.MIN_ADDRESS if "ip" in cols else 0)
+                    + (self.MIN_NOTES if "notes" in cols else 0))
+            if need <= inner:
+                break
+        widths = {c: self.FIXED[c] for c in cols if c in self.FIXED}
+        spare = inner - sum(widths.values())
+        if "ip" in cols:
+            # A wider window shows more of each VM's addresses, up to all of them
+            free = spare - self.MIN_ADDRESS - self.MIN_NAME - (self.MIN_NOTES if "notes" in cols else 0)
+            extra = max(0, min(self._address_need + 26 - self.MIN_ADDRESS, int(free * 0.5)))
+            widths["ip"] = self.MIN_ADDRESS + extra
+            spare -= widths["ip"]
+        if "notes" in cols:
+            widths["notes"] = max(self.MIN_NOTES, spare - max(self.MIN_NAME, spare * 3 // 5))
+            spare -= widths["notes"]
+        widths["name"] = max(self.MIN_NAME, spare)
+        x, layout = self.PAD + 1, {}
+        for col in cols:
+            layout[col] = (x, widths[col])
+            x += widths[col]
+        return layout
+
+    # ── Drawing ──────────────────────────────────────────────────────────────
+    def _draw(self):
+        c = self.canvas
+        c.delete("all")
+        self._hits, self._items, self._hover = [], {}, None
+        width = c.winfo_width()
+        if width <= 1:
+            return
+        self._cols = self._layout(width - 1)
+        y = 0
+        for row in self._rows:
+            if row[0] == "node":
+                y += 6
+                self._draw_band(y, width - 1, *row[1:])
+                self._hits.append((y, y + self.BAND_H, "node", row[1]))
+                y += self.BAND_H + self.GAP
+            else:
+                self._draw_vm(y, width - 1, row[1], row[2], row[3])
+                self._hits.append((y, y + self.ROW_H, "vm", row[1]))
+                y += self.ROW_H + self.GAP
+        c.configure(scrollregion=(0, 0, width, max(y, 1)))
+        self._restyle_all()
+        self._draw_headings()
+
+    def _draw_band(self, y, x2, node, is_open, running, total):
+        c = self.canvas
+        bg = round_rect(c, 0, y, x2, y + self.BAND_H, 6, fill=C["surface1"], outline="")
+        bar = round_rect(c, 0, y, 10, y + self.BAND_H, 6, fill=C["accent"], outline="")
+        patch = c.create_rectangle(4, y, 11, y + self.BAND_H, fill=C["surface1"], outline="")
+        mid = y + self.BAND_H // 2
+        if is_open:
+            c.create_line(13, mid - 2, 17, mid + 2, 21, mid - 2, fill=C["text"], width=1.5)
+        else:
+            c.create_line(15, mid - 4, 19, mid, 15, mid + 4, fill=C["text"], width=1.5)
+        c.create_text(30, mid, text=node, anchor="w", fill=C["text"], font=self._band_font)
+        c.create_text(x2 - 14, mid, text=f"{running}/{total} running", anchor="e",
+                      fill=C["subtext1"], font=self._detail_font)
+        self._items[("node", node)] = {"bg": bg, "patch": patch, "bar": bar}
+
+    def _draw_vm(self, y, x2, iid, vm, detail):
+        c = self.canvas
+        cols = self._cols
+        running = vm["status"] == "running"
+        mid = y + self.ROW_H // 2
+        items = {"bg": round_rect(c, 0, y, x2, y + self.ROW_H, 6, fill=C["surface0"],
+                                  outline=C["surface0"])}
+        x, _ = cols["badge"]
+        round_rect(c, x, mid - 11, x + 32, mid + 11, 4, fill=C["surface1"], outline="")
+        c.create_text(x + 16, mid, text=os_badge(vm["ostype"]), fill=C["subtext1"],
+                      font=(FONT, 7, "bold"))
+        x, w = cols["name"]
+        c.create_text(x, mid - 8, text=elide(vm["name"], w - 8, self._name_font), anchor="w",
+                      fill=C["text"] if running else C["subtext0"], font=self._name_font)
+        c.create_text(x, mid + 9, text=elide(detail, w - 8, self._detail_font), anchor="w",
+                      fill=C["subtext0"], font=self._detail_font)
+        if "ip" in cols:
+            x, w = cols["ip"]
+            c.create_text(x, mid, text=self.app._address_cell(vm, w - 24), anchor="w",
+                          fill=C["subtext1"], font=self._mono_font)
+        if "notes" in cols:
+            x, w = cols["notes"]
+            c.create_text(x, mid, text=elide(notes_cell(vm), w - 10, self._cell_font),
+                          anchor="w", fill=C["subtext1"], font=self._cell_font)
+        if "snaps" in cols:
+            x, _ = cols["snaps"]
+            self._camera(x, mid)
+            c.create_text(x + 21, mid, text=str(vm["snaps"]), anchor="w",
+                          fill=C["subtext0"], font=self._cell_font)
+        x, _ = cols["status"]
+        color = C["green"] if running else C["overlay0"]
+        c.create_oval(x, mid - 4, x + 8, mid + 4, fill=color, outline="")
+        status = vm["status"].title() or "Unknown"
+        c.create_text(x + 15, mid, text=status, anchor="w", font=self._cell_font,
+                      fill=C["green"] if running else C["overlay1"])
+        items["button"] = self._draw_button(*cols["button"], mid, running)
+        self._items[("vm", iid)] = items
+
+    def _draw_button(self, x, w, mid, running):
+        """Connect for a running VM, Start for a stopped one; returns its hit box."""
+        c = self.canvas
+        kind = "connect" if running else "start"
+        btn = round_rect(c, x, mid - 14, x + w, mid + 14, 5,
+                         fill=C["accent"] if running else C["base"],
+                         outline="" if running else C["surface1"])
+        fg = C["on_accent"] if running else C["text"]
+        label = "Connect" if running else "Start"
+        text_w = self._cell_font.measure(label)
+        gx = x + (w - text_w - 20) // 2
+        if running:
+            c.create_rectangle(gx, mid - 5, gx + 12, mid + 3, outline=fg, width=1.4)
+            c.create_line(gx + 6, mid + 3, gx + 6, mid + 6, fill=fg, width=1.4)
+            c.create_line(gx + 3, mid + 6, gx + 10, mid + 6, fill=fg, width=1.4)
+        else:
+            c.create_polygon(gx + 2, mid - 5, gx + 2, mid + 5, gx + 10, mid,
+                             outline=fg, fill="", width=1.3)
+        c.create_text(gx + 20, mid, text=label, anchor="w", fill=fg, font=self._cell_font)
+        return (btn, kind, x, x + w, mid - 14, mid + 14)
+
+    def _camera(self, x, mid):
+        c, color = self.canvas, C["overlay1"]
+        round_rect(c, x, mid - 4, x + 14, mid + 6, 2, fill="", outline=color, width=1.2)
+        c.create_line(x + 4, mid - 4, x + 5, mid - 6, x + 9, mid - 6, x + 10, mid - 4,
+                      fill=color, width=1.2)
+        c.create_oval(x + 4, mid - 2, x + 10, mid + 4, outline=color, width=1.2)
+
+    def _restyle(self, kind, key):
+        items = self._items.get((kind, key))
+        if not items:
+            return
+        hovered = self._hover is not None and self._hover[:2] == (kind, key)
+        c = self.canvas
+        if kind == "node":
+            fill = C["surface2"] if hovered else C["surface1"]
+            c.itemconfig(items["bg"], fill=fill)
+            c.itemconfig(items["patch"], fill=fill)
+            return
+        selected = key in self._sel
+        c.itemconfig(items["bg"], fill=C["surface1"] if selected else C["surface0"],
+                     outline=C["accent"] if selected else (C["surface2"] if hovered else C["surface0"]))
+        btn, btn_kind = items["button"][:2]
+        on_button = hovered and self._hover[2]
+        if btn_kind == "connect":
+            c.itemconfig(btn, fill=mix(C["accent"], C["text"], 0.18) if on_button else C["accent"])
+        else:
+            c.itemconfig(btn, fill=C["surface1"] if on_button else C["base"])
+
+    def _restyle_all(self):
+        for kind, key in self._items:
+            self._restyle(kind, key)
+
+    def _draw_headings(self):
+        h = self.headings
+        h.delete("all")
+        self._heading_hits = []
+        sort, desc = self.app._sort_col, self.app._sort_desc
+        for col, label in self.HEADINGS:
+            if col not in self._cols:
+                continue
+            x, _ = self._cols[col]
+            mark = ("▼" if desc else "▲") if col == sort else "↕"
+            text = f"{label} {mark}"
+            tw = self._heading_font.measure(text)
+            hovered = self._hover_heading == col
+            if hovered:
+                round_rect(h, x - 7, 2, x + tw + 7, 24, 5, fill=C["surface1"], outline="")
+            color = C["accent"] if col == sort else (C["text"] if hovered else C["subtext0"])
+            h.create_text(x, 13, text=text, anchor="w", fill=color, font=self._heading_font)
+            self._heading_hits.append((x - 7, x + tw + 7, col))
+
+    # ── Mouse and keys ───────────────────────────────────────────────────────
+    def _hit(self, event):
+        y = self.canvas.canvasy(event.y)
+        for y1, y2, kind, key in self._hits:
+            if y1 <= y < y2:
+                items = self._items.get((kind, key), {})
+                button = items.get("button")
+                on_button = bool(button and button[2] <= event.x < button[3]
+                                 and button[4] <= y < button[5])
+                return kind, key, on_button
+        return None
+
+    def _set_hover(self, hover):
+        if hover == self._hover:
+            return
+        old, self._hover = self._hover, hover
+        for h in (old, hover):
+            if h:
+                self._restyle(h[0], h[1])
+        on_target = hover and (hover[0] == "node" or hover[2])
+        self.canvas.config(cursor="hand2" if on_target else "")
+
+    def _on_motion(self, event):
+        self._set_hover(self._hit(event))
+
+    def _on_click(self, event):
+        self.canvas.focus_set()
+        hit = self._hit(event)
+        if hit is None:
+            return "break"
+        kind, key, on_button = hit
+        if kind == "node":
+            self.app._toggle_node(key)
+            return "break"
+        ctrl, shift = event.state & 0x4, event.state & 0x1
+        if on_button:
+            self.selection_set([key])
+            kind = self._items[("vm", key)]["button"][1]
+            (self.app._launch_spice if kind == "connect" else self.app._start_vm)()
+        elif ctrl:
+            self._sel = [i for i in self._sel if i != key] if key in self._sel else self._sel + [key]
+            self._cursor = self._anchor = key
+            self._changed()
+        elif shift and self._anchor:
+            self._select_range(key)
+        else:
+            self._sel = [key]
+            self._cursor = self._anchor = key
+            self._changed()
+        return "break"
+
+    def _on_double(self, event):
+        hit = self._hit(event)
+        if hit and hit[0] == "node":
+            # Tk takes a second quick click as a double-click; it still folds, as on Windows
+            self.app._toggle_node(hit[1])
+        elif hit and hit[0] == "vm" and not hit[2]:
+            self.selection_set([hit[1]])
+            self.app._launch_spice()
+        return "break"
+
+    def _select_range(self, key):
+        shown = self.shown()
+        a, b = shown.index(self._anchor), shown.index(key)
+        self._sel = shown[min(a, b):max(a, b) + 1]
+        self._cursor = key
+        self._changed()
+
+    def _on_arrow(self, key, shift):
+        shown = self.shown()
+        if not shown:
+            return "break"
+        page = max(1, self.canvas.winfo_height() // (self.ROW_H + self.GAP) - 1)
+        idx = shown.index(self._cursor) if self._cursor in shown else -1
+        target = {"Up": idx - 1, "Down": idx + 1, "Home": 0, "End": len(shown) - 1,
+                  "Prior": idx - page, "Next": idx + page}[key]
+        if idx < 0:
+            target = 0
+        target = shown[max(0, min(target, len(shown) - 1))]
+        if shift and self._anchor in shown:
+            self._select_range(target)
+        else:
+            self._sel = [target]
+            self._cursor = self._anchor = target
+            self._changed()
+        self.see(target)
+        return "break"
+
+    def _changed(self):
+        self._restyle_all()
+        self.app._on_list_select()
+
+    def _scroll(self, step):
+        if self.scrollbar.winfo_ismapped():
+            self.canvas.yview_scroll(step * 3, "units")
+        return "break"
+
+    def _autohide(self, first, last):
+        # Only show the scrollbar when the list doesn't fit
+        if float(first) <= 0 and float(last) >= 1:
+            self.scrollbar.grid_remove()
+        else:
+            self.scrollbar.grid(row=1, column=1, sticky="ns", padx=(6, 0))
+        self.scrollbar.set(first, last)
+
+    def _heading_at(self, x):
+        return next((col for x1, x2, col in getattr(self, "_heading_hits", []) if x1 <= x < x2), None)
+
+    def _set_heading_hover(self, col):
+        if col != self._hover_heading:
+            self._hover_heading = col
+            self.headings.config(cursor="hand2" if col else "")
+            self._draw_headings()
+
+    def _on_heading_motion(self, event):
+        self._set_heading_hover(self._heading_at(event.x))
+
+    def _on_heading_click(self, event):
+        col = self._heading_at(event.x)
+        if col:
+            self.app._sort_by(col)
+
+
 class ProxmoxSpiceManagerBase(tk.Tk):
     """Base class with all shared UI and logic. Subclasses must implement
     the platform-specific methods listed below."""
@@ -1152,8 +1621,6 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._sort_desc = self.config_data.get("vm_sort_desc", False)
         self._collapsed_nodes = set()
         self._show_ipv6 = bool(self.config_data.get("show_ipv6", False))
-        self._row_font = tkfont.Font(font=(FONT, 10))
-        self._heading_font = tkfont.Font(font=(FONT, 11, "bold"))  # node headings
         self._cluster_idx = -1
         self._cluster_status = {}      # name -> (online, vm count)
         self._loaded_cluster = None
@@ -1260,22 +1727,6 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             arrowcolor=C["overlay0"], borderwidth=0, relief="flat",
         )
         style.map("Vertical.TScrollbar", background=[("active", C["surface2"])])
-        style.configure(
-            "Vm.Treeview", background=C["base"], fieldbackground=C["base"],
-            foreground=C["text"], rowheight=30, font=(FONT, 10), borderwidth=0,
-        )
-        style.map(
-            "Vm.Treeview",
-            background=[("selected", C["surface1"])],
-            foreground=[("selected", C["text"])],
-        )
-        style.configure(
-            "Vm.Treeview.Heading", background=C["base"], foreground=C["subtext0"],
-            font=(FONT, 9, "bold"), borderwidth=0, relief="flat", padding=(6, 4),
-        )
-        style.map("Vm.Treeview.Heading", background=[("active", C["surface0"])],
-                  foreground=[("active", C["text"])])
-        style.layout("Vm.Treeview", [("Vm.Treeview.treearea", {"sticky": "nswe"})])
 
         sidebar = tk.Frame(self, bg=C["crust"], width=232)
         sidebar.pack(side="left", fill="y")
@@ -1402,56 +1853,23 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self.status_label.pack(fill="x", pady=(0, 14), after=header)
 
         chips = tk.Frame(main, bg=C["base"])
-        chips.pack(fill="x", pady=(0, 8))
+        chips.pack(fill="x", pady=(0, 6))
         self._chips = {}
         for key in ("all", "running", "stopped"):
-            chip = tk.Label(chips, padx=12, pady=3, font=(FONT, 10), cursor="hand2",
-                            highlightthickness=1)
+            chip = Chip(chips, lambda k=key: self._set_vm_filter(k))
             chip.pack(side="left", padx=(0, 6))
-            chip.bind("<Button-1>", lambda e, k=key: self._set_vm_filter(k))
             self._chips[key] = chip
-        self._group_chip = tk.Label(chips, padx=12, pady=3, font=(FONT, 10), cursor="hand2",
-                                    highlightthickness=1)
-        self._group_chip.pack(side="right")
-        self._group_chip.bind("<Button-1>", lambda e: self._toggle_grouping())
-        self._ipv6_chip = tk.Label(chips, text="IPv6", padx=12, pady=3, font=(FONT, 10),
-                                   cursor="hand2", highlightthickness=1)
+        self._sort_chip = Chip(chips, self._open_sort_menu, chevron=True)
+        self._sort_chip.pack(side="right")
+        self._group_chip = Chip(chips, self._toggle_grouping)
+        self._group_chip.pack(side="right", padx=(0, 6))
+        self._ipv6_chip = Chip(chips, self._toggle_ipv6)
         self._ipv6_chip.pack(side="right", padx=(0, 6))
-        self._ipv6_chip.bind("<Button-1>", lambda e: self._toggle_ipv6())
 
         table = tk.Frame(main, bg=C["base"])
         table.pack(fill="both", expand=True)
-        columns = ("os", "name", "vmid", "ip", "node", "pool", "snaps", "status", "notes")
-        tree = ttk.Treeview(table, columns=columns, show="headings",
-                            selectmode="extended", style="Vm.Treeview")
-        for col in columns:
-            tree.column(col, width=self.FIXED_WIDTHS.get(col, 120), minwidth=40,
-                        stretch=False, anchor="w")
-            if col != "os":
-                tree.heading(col, anchor="w", command=lambda c=col: self._sort_by(c))
-        # Node headings: a shaded band, so they read as sections, not as VMs
-        tree.tag_configure("group", foreground=C["accent"], background=C["surface1"],
-                           font=(FONT, 11, "bold"))
-        tree.tag_configure("running", foreground=C["text"])
-        tree.tag_configure("stopped", foreground=C["overlay1"])
-        scrollbar = ttk.Scrollbar(table, orient="vertical", command=tree.yview)
-
-        def autohide(first, last):
-            # Only show the scrollbar when the list doesn't fit
-            if float(first) <= 0 and float(last) >= 1:
-                scrollbar.pack_forget()
-            elif not scrollbar.winfo_ismapped():
-                scrollbar.pack(side="right", fill="y", before=tree)
-            scrollbar.set(first, last)
-
-        tree.configure(yscrollcommand=autohide)
-        tree.pack(side="left", fill="both", expand=True)
-        tree.bind("<<TreeviewSelect>>", self._on_tree_select)
-        tree.bind("<Button-1>", self._on_tree_click)
-        tree.bind("<Configure>", lambda e: self._fit_columns())
-        tree.bind("<Double-1>", self._on_vm_double_click)
-        self.vm_tree = tree
-        self._update_headings()
+        self.vm_list = VmList(table, self)
+        self.vm_list.pack(fill="both", expand=True)
         self._empty_label = tk.Label(table, bg=C["base"], fg=C["overlay1"], font=(FONT, 10))
 
     def _update_search_hint(self):
@@ -1469,7 +1887,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
 
     def _on_search_changed(self, *_):
         self._update_search_hint()
-        if hasattr(self, "vm_tree"):
+        if hasattr(self, "vm_list"):
             self._render_vms()
 
     def _set_vm_filter(self, key):
@@ -1483,20 +1901,18 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         labels = {"all": "All", "running": "Running", "stopped": "Stopped"}
         for key, chip in self._chips.items():
             on = key == self._vm_filter
-            chip.config(
-                text=f"{labels[key]}  {counts[key]}",
-                bg=C["accent"] if on else C["surface0"],
-                fg=C["on_accent"] if on else C["text"],
-                highlightbackground=C["accent"] if on else C["surface1"],
-                font=(FONT, 10, "bold") if on else (FONT, 10),
-            )
+            chip.set(f"{labels[key]}  {counts[key]}",
+                     bg=C["accent"] if on else C["surface0"],
+                     fg=C["on_accent"] if on else C["text"],
+                     border=C["accent"] if on else C["surface1"], bold=on)
         for chip, label, on in ((self._group_chip, "Group by node", self._group_by_node),
                                 (self._ipv6_chip, "IPv6", self._show_ipv6)):
-            chip.config(
-                text=f"✓ {label}" if on else label,
-                bg=C["surface1"] if on else C["surface0"], fg=C["text"],
-                highlightbackground=C["surface2"] if on else C["surface1"],
-            )
+            chip.set(f"✓ {label}" if on else label,
+                     bg=C["surface1"] if on else C["surface0"], fg=C["text"],
+                     border=C["surface2"] if on else C["surface1"],
+                     hover_bg=C["surface2"] if on else C["surface1"])
+        self._sort_chip.set(f"Sort: {SORT_LABELS[self._sort_col]} {'▼' if self._sort_desc else '▲'}",
+                            bg=C["surface0"], fg=C["text"], border=C["surface1"])
 
     def _vm_matches(self, vm, query):
         running = vm["status"] == "running"
@@ -1511,30 +1927,28 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         return any(query in f.lower() for f in fields)
 
     def _render_vms(self, keep=None):
-        """Redraw the table from self._vms, grouped by node, keeping the selection."""
-        tree = self.vm_tree
+        """Redraw the list from self._vms, grouped by node, keeping the selection."""
         if keep is None:
             keep = {vm["vmid"] for vm in self._get_selected_vms()}
-        tree.delete(*tree.get_children())
-        self._iid_to_vm = {}
         query = self.search_var.get().strip().lower()
         visible = sorted((vm for vm in self._vms if self._vm_matches(vm, query)),
                          key=lambda v: vm_sort_key(v, self._sort_col, self._show_ipv6), reverse=self._sort_desc)
-        self._fit_columns()
+        self._iid_to_vm = {f"vm:{vm['vmid']}": vm for vm in visible}
+        rows = []
         if self._group_by_node:
             for node in sorted({vm["node"] for vm in visible}):
                 vms = [vm for vm in visible if vm["node"] == node]
                 running = sum(1 for vm in vms if vm["status"] == "running")
                 is_open = node not in self._collapsed_nodes
-                group = f"node:{node}"
-                tree.insert("", "end", iid=group, open=is_open, tags=("group",), values=(
-                    "", self._node_heading(node, is_open, running, len(vms)),
-                    "", "", "", "", "", "", ""))
-                for vm in vms:
-                    self._insert_vm(group, vm)
+                rows.append(("node", node, is_open, running, len(vms)))
+                if is_open:
+                    rows += [self._vm_row(vm) for vm in vms]
         else:
-            for vm in visible:
-                self._insert_vm("", vm)
+            rows = [self._vm_row(vm) for vm in visible]
+        measure = self.vm_list._mono_font.measure
+        address_need = max((measure(", ".join(ip for _, ip in vm_ips(vm, self._show_ipv6)))
+                            for vm in visible), default=0)
+        self.vm_list.set_rows(rows, address_need)
         self._update_chips()
 
         if visible:
@@ -1549,27 +1963,20 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             self._empty_label.config(text=text)
             self._empty_label.place(relx=0.5, rely=0.4, anchor="center")
 
-        # A VM inside a folded node stays unselected: see() would unfold it again,
-        # and keys shouldn't act on a VM that isn't on screen
+        # A VM inside a folded node stays unselected, and keys don't act on a
+        # VM that isn't on screen
         shown = self._shown_vm_iids()
         selection = [f"vm:{vmid}" for vmid in keep if f"vm:{vmid}" in shown]
         if not selection and shown:
             selection = shown[:1]
+        self.vm_list.selection_set(selection)
         if selection:
-            tree.selection_set(selection)
-            tree.focus(selection[0])
-            tree.see(selection[0])
-        self._update_inspector()
+            self.vm_list.see(selection[0])
 
-    def _insert_vm(self, parent, vm):
-        iid = f"vm:{vm['vmid']}"
-        is_running = vm["status"] == "running"
-        status = "● Running" if is_running else f"○ {vm['status'].title() or 'Unknown'}"
-        self.vm_tree.insert(parent, "end", iid=iid, tags=("running" if is_running else "stopped",),
-                            values=(os_badge(vm["ostype"]), vm["name"], vm["vmid"],
-                                    self._address_cell(vm), vm["node"], vm["pool"] or "—",
-                                    vm["snaps"], status, notes_cell(vm)))
-        self._iid_to_vm[iid] = vm
+    def _vm_row(self, vm):
+        # Second line of a row: "101 · desktops", led by the node when ungrouped
+        parts = ("" if self._group_by_node else vm["node"], str(vm["vmid"]), vm["pool"])
+        return ("vm", f"vm:{vm['vmid']}", vm, " · ".join(p for p in parts if p))
 
     def _show_addresses(self, vm):
         """Inspector: each adapter's name, dimmed, over its addresses."""
@@ -1589,62 +1996,22 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             for ip in ips:
                 tk.Label(frame, text=ip, bg=bg, fg=C["text"], font=(MONO, 9)).pack(anchor="w")
 
-    def _address_cell(self, vm):
-        """Every address that fits the column, "+N" for the rest, or why there is none."""
+    def _address_cell(self, vm, width):
+        """Every address that fits in `width` pixels, "+N" for the rest, or why there is none."""
         ips = [ip for _, ip in vm_ips(vm, self._show_ipv6)]
         if not ips:
             return vm["ip_note"] or "—"
-        width = int(self.vm_tree.column("ip", "width")) - self.CELL_PADDING
-        return fit_addresses(ips, width, self._row_font.measure)
+        return fit_addresses(ips, width, self.vm_list._mono_font.measure)
 
-    # Name, address and notes share what the fixed columns leave; Tk won't size
-    # them itself. The address width here is its minimum.
-    FIXED_WIDTHS = {"os": 40, "vmid": 48, "ip": 118, "node": 70, "pool": 78,
-                    "snaps": 72, "status": 88}
-    # Dropped first when the list is too narrow, so status and notes stay on screen
-    OPTIONAL_COLUMNS = ("pool", "snaps", "node", "vmid", "ip")
-    MIN_NAME, MIN_NOTES = 106, 80
-    CELL_PADDING = 12
-
-    def _fit_columns(self):
-        tree = self.vm_tree
-        shown = [c for c in tree["columns"] if c != "node" or not self._group_by_node]
-        width = tree.winfo_width() - 4
-        min_name = self._min_name_width()
-        for col in self.OPTIONAL_COLUMNS:
-            fixed = sum(self.FIXED_WIDTHS.get(c, 0) for c in shown)
-            if fixed + min_name + self.MIN_NOTES <= width:
-                break
-            if col in shown and col != self._sort_col:
-                shown.remove(col)
-        tree["displaycolumns"] = shown
-        spare = width - sum(self.FIXED_WIDTHS.get(c, 0) for c in shown)
-        if "ip" in shown:
-            # A wider window shows more of each VM's addresses, up to all of them
-            needed = max((self._row_font.measure(", ".join(ip for _, ip in vm_ips(vm, self._show_ipv6)))
-                          for vm in self._vms), default=0) + self.CELL_PADDING
-            free = spare - min_name - self.MIN_NOTES
-            extra = max(0, min(needed - self.FIXED_WIDTHS["ip"], int(free * 0.5)))
-            tree.column("ip", width=self.FIXED_WIDTHS["ip"] + extra)
-            spare -= extra
-        name = max(min_name, min(int(spare * 0.65), spare - self.MIN_NOTES))
-        tree.column("name", width=name)
-        tree.column("notes", width=max(self.MIN_NOTES, spare - name))
-        for iid, vm in self._iid_to_vm.items():
-            tree.set(iid, "ip", self._address_cell(vm))
-
-    def _update_headings(self):
-        for col, label in SORT_LABELS.items():
-            # Every heading carries a sort mark so it reads as clickable
-            text = "SNAPS" if col == "snaps" else label.upper()
-            if col == self._sort_col:
-                text += " ▼" if self._sort_desc else " ▲"
-            else:
-                text += " ↕"
-            self.vm_tree.heading(col, text=text)
+    def _open_sort_menu(self):
+        # Picking the current key again reverses the order, like a column heading
+        mark = "▼" if self._sort_desc else "▲"
+        entries = [(f"✓  {label}  {mark}" if key == self._sort_col else f"     {label}",
+                    lambda k=key: self._sort_by(k)) for key, label in SORT_LABELS.items()]
+        self._show_menu(self._sort_chip, entries, above=False)
 
     def _sort_by(self, column):
-        """Heading click: sort by that column; clicking it again reverses."""
+        """Heading click or Sort menu: sort by that column; picking it again reverses."""
         if column == self._sort_col:
             self._sort_desc = not self._sort_desc
         else:
@@ -1652,7 +2019,6 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self.config_data["vm_sort"] = self._sort_col
         self.config_data["vm_sort_desc"] = self._sort_desc
         self._save_config()
-        self._update_headings()
         self._render_vms()
 
     def _toggle_grouping(self):
@@ -1661,55 +2027,34 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._save_config()
         self._render_vms()
 
-    def _on_tree_click(self, event):
-        """A click on a node heading folds or unfolds it and leaves the selection alone."""
-        iid = self.vm_tree.identify_row(event.y)
-        if not iid.startswith("node:"):
-            return None
-        node = iid[len("node:"):]
+    def _toggle_node(self, node):
+        """A click on a node band folds or unfolds it and leaves the selection alone."""
         if node in self._collapsed_nodes:
             self._collapsed_nodes.discard(node)
         else:
             self._collapsed_nodes.add(node)
         self._render_vms()
-        return "break"
-
-    @staticmethod
-    def _node_heading(node, is_open, running, total):
-        return f"{'▾' if is_open else '▸'}  {node}  ·  {running}/{total} running"
-
-    def _min_name_width(self):
-        """Name column minimum; when grouped, wide enough for every node heading."""
-        if not self._group_by_node:
-            return self.MIN_NAME
-        widest = max((self._heading_font.measure(self._node_heading(vm["node"], True, 99, 99))
-                      for vm in self._vms), default=0)
-        return max(self.MIN_NAME, widest + self.CELL_PADDING)
 
     def _shown_vm_iids(self):
-        """VM rows on screen, in list order: not inside a folded node heading."""
-        tree = self.vm_tree
-        return [iid for iid in self._iid_to_vm
-                if not tree.parent(iid) or tree.item(tree.parent(iid), "open")]
+        """VM rows on screen, in list order: not inside a folded node."""
+        return self.vm_list.shown()
 
     def _focus_tree(self):
-        tree = self.vm_tree
         shown = self._shown_vm_iids()
-        if not tree.selection() and shown:
-            tree.selection_set(shown[0])
-            tree.focus(shown[0])
-        tree.focus_set()
+        if not self.vm_list.selection() and shown:
+            self.vm_list.selection_set(shown[:1])
+        self.vm_list.focus_list()
 
     def _select_all_vms(self):
         shown = self._shown_vm_iids()
         if shown:
-            self.vm_tree.selection_set(shown)
+            self.vm_list.selection_set(shown)
 
     # ── Selection ────────────────────────────────────────────────────────────
     def _get_selected_vms(self):
-        if not hasattr(self, "vm_tree"):
+        if not hasattr(self, "vm_list"):
             return []
-        return [self._iid_to_vm[iid] for iid in self.vm_tree.selection()
+        return [self._iid_to_vm[iid] for iid in self.vm_list.selection()
                 if iid in self._iid_to_vm]
 
     def _get_selected_vm(self):
@@ -1723,51 +2068,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         )
         return None
 
-    def _on_tree_select(self, event=None):
-        tree = self.vm_tree
-        groups = [iid for iid in tree.selection() if iid not in self._iid_to_vm]
-        if groups:
-            # Node headings aren't VMs. Arrow keys can still land on one: step
-            # onto its first VM instead of leaving nothing selected.
-            tree.selection_remove(groups)
-            if not tree.selection():
-                target = self._vm_beside_heading(groups[0])
-                if target:
-                    tree.selection_set(target)
-                    tree.focus(target)
-            return
-        selected = tree.selection()
-        if selected:
-            self._last_vm_iid = selected[-1]
+    def _on_list_select(self):
         self._update_inspector()
-
-    def _vm_beside_heading(self, heading):
-        """The VM next to a node heading, in the direction the arrow keys came from."""
-        order = list(self._iid_to_vm)  # display order
-        children = [c for c in self.vm_tree.get_children(heading) if c in self._iid_to_vm] \
-            if self.vm_tree.item(heading, "open") else []
-        # The first VM shown after this heading, whatever group it's in
-        after = children[0] if children else None
-        if after is None:
-            later = self.vm_tree.next(heading)
-            while later and not after:
-                kids = self.vm_tree.get_children(later) if self.vm_tree.item(later, "open") else ()
-                after = kids[0] if kids else None
-                later = self.vm_tree.next(later)
-        last = getattr(self, "_last_vm_iid", None)
-        if last in order and after in order and order.index(last) >= order.index(after):
-            # Coming up from below: stop on the VM just above the heading
-            idx = order.index(after) - 1
-            return order[idx] if idx >= 0 else last
-        return after or last
-
-    def _on_vm_double_click(self, event):
-        iid = self.vm_tree.identify_row(event.y)
-        if iid not in self._iid_to_vm:
-            return "break"  # a node heading; the single click already folded it
-        self.vm_tree.selection_set(iid)
-        self._launch_spice()
-        return "break"
 
     # ── Inspector ────────────────────────────────────────────────────────────
     def _build_inspector(self, parent):
@@ -1932,9 +2234,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         else:
             vm_notes.pop(key, None)
         self._save_config()
-        iid = f"vm:{vm['vmid']}"
-        if hasattr(self, "vm_tree") and self.vm_tree.exists(iid):
-            self.vm_tree.set(iid, "notes", notes_cell(vm))
+        if hasattr(self, "vm_list"):
+            self.vm_list.update_notes(f"vm:{vm['vmid']}")
 
     def _on_notes_return(self, event=None):
         self._commit_note()
