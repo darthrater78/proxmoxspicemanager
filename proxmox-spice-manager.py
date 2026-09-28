@@ -150,7 +150,41 @@ THEMES = {
     },
 }
 
-C = dict(THEMES["Catppuccin Mocha"])
+DEFAULT_THEME = "Catppuccin Mocha"
+DEFAULT_ACCENT = "Orange"
+
+# Accent presets name a colour slot, so each one takes the active theme's shade of it
+ACCENTS = {
+    "Orange": "peach",
+    "Blue": "blue",
+    "Teal": "teal",
+    "Green": "green",
+    "Purple": "mauve",
+    "Red": "red",
+    "Yellow": "yellow",
+}
+
+
+def on_accent(hex_color):
+    """Near-black or white, whichever contrasts more with the accent."""
+    def lin(c):
+        v = c / 255
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    dark_lum = 0.0103  # relative luminance of #1a1a1a
+    return "#1a1a1a" if (lum + 0.05) / (dark_lum + 0.05) >= 1.05 / (lum + 0.05) else "#ffffff"
+
+
+def apply_theme(theme, accent):
+    """Load a theme and accent into C, the palette every widget reads."""
+    C.update(THEMES.get(theme, THEMES[DEFAULT_THEME]))
+    C["accent"] = C[ACCENTS.get(accent, ACCENTS[DEFAULT_ACCENT])]
+    C["on_accent"] = on_accent(C["accent"])
+
+
+C = {}
+apply_theme(DEFAULT_THEME, DEFAULT_ACCENT)
 
 # Font constants — overridden by platform scripts before UI is built
 FONT = "sans-serif"
@@ -841,6 +875,109 @@ class SnapshotDialog(tk.Toplevel):
 
 
 # ─── Base Application ────────────────────────────────────────────────────────
+# ─── Main-window widgets ──────────────────────────────────────────────────────
+def mix(c1, c2, t):
+    """Blend two #rrggbb colours; t=0 gives c1, t=1 gives c2."""
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
+
+
+def round_rect(canvas, x1, y1, x2, y2, r, **kw):
+    points = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+              x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+    return canvas.create_polygon(points, smooth=True, **kw)
+
+
+def os_badge(ostype):
+    if ostype.startswith("w"):
+        return "WIN"
+    return {"l24": "LNX", "l26": "LNX", "solaris": "SOL"}.get(ostype, "VM")
+
+
+OS_LABELS = {
+    "win11": "Windows 11", "win10": "Windows 10", "win8": "Windows 8",
+    "win7": "Windows 7", "w2k8": "Windows Server 2008",
+    "w2k3": "Windows Server 2003", "w2k": "Windows 2000",
+    "wvista": "Windows Vista", "wxp": "Windows XP",
+    "l24": "Linux", "l26": "Linux", "solaris": "Solaris", "other": "Other OS",
+}
+
+
+def os_label(ostype):
+    return OS_LABELS.get(ostype, ostype or "Unknown OS")
+
+
+class KeyCap(tk.Label):
+    """A key hint such as "F5"."""
+
+    def __init__(self, master, text, bg, fg=None):
+        fg = fg or C["overlay1"]
+        super().__init__(
+            master, text=text, bg=bg, fg=fg, font=(MONO, 8), padx=4, pady=0,
+            highlightthickness=1, highlightbackground=mix(fg, bg, 0.5),
+        )
+
+
+class ActionButton(tk.Frame):
+    """Flat button made of labels: icon, text and key hint, with hover and a
+    disabled state. tk.Button can't hold a right-aligned key hint."""
+
+    def __init__(self, master, text, command, icon="", key="", bg=None, fg=None,
+                 hover_bg=None, border=None, bold=False, pady=6):
+        bg = bg or C["surface0"]
+        super().__init__(master, bg=bg, highlightthickness=1,
+                         highlightbackground=border or C["surface1"], cursor="hand2")
+        self._bg = bg
+        self._hover_bg = hover_bg or C["surface1"]
+        self._fg = fg or C["text"]
+        self._command = command
+        self._enabled = True
+        font = (FONT, 10, "bold") if bold else (FONT, 10)
+        inner = tk.Frame(self, bg=bg)
+        inner.pack(fill="x", padx=10, pady=pady)
+        self._parts = [self, inner]
+        self._labels = []
+        if key:
+            cap = KeyCap(inner, key, bg, fg=None if fg is None else fg)
+            cap.pack(side="right", padx=(8, 0))
+            self._parts.append(cap)
+        if icon:
+            glyph = tk.Label(inner, text=icon, bg=bg, fg=self._fg, font=font, width=2, anchor="w")
+            glyph.pack(side="left")
+            self._parts.append(glyph)
+            self._labels.append(glyph)
+        self.label = tk.Label(inner, text=text, bg=bg, fg=self._fg, font=font, anchor="w")
+        self.label.pack(side="left")
+        self._parts.append(self.label)
+        self._labels.append(self.label)
+        for part in self._parts:
+            part.bind("<Button-1>", self._click)
+            part.bind("<Enter>", lambda e: self._paint(self._hover_bg))
+            part.bind("<Leave>", lambda e: self._paint(self._bg))
+
+    def _paint(self, color):
+        if not self._enabled:
+            color = self._bg
+        for part in self._parts:
+            part.config(bg=color)
+
+    def _click(self, event=None):
+        if self._enabled and self._command:
+            self._command()
+        return "break"
+
+    def set_enabled(self, enabled):
+        self._enabled = enabled
+        fg = self._fg if enabled else mix(self._fg, self._bg, 0.6)
+        for label in self._labels:
+            label.config(fg=fg)
+        self.config(cursor="hand2" if enabled else "arrow")
+
+    def set_text(self, text):
+        self.label.config(text=text)
+
+
 class ProxmoxSpiceManagerBase(tk.Tk):
     """Base class with all shared UI and logic. Subclasses must implement
     the platform-specific methods listed below."""
@@ -864,11 +1001,9 @@ class ProxmoxSpiceManagerBase(tk.Tk):
     def _platform_find_viewer(self):
         raise NotImplementedError
 
-    def _platform_header_buttons(self, header):
-        pass
-
-    def _platform_bottom_buttons(self, bottom):
-        pass
+    def _platform_menu_entries(self):
+        """Extra Settings menu entries: (label, action) tuples."""
+        return []
 
     def _platform_set_vv_permissions(self, vv_path):
         pass
@@ -902,9 +1037,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         super().__init__()
         version = self._get_app_version()
         self.title(f"Proxmox SPICE Manager v{version}")
-        self.geometry("1100x640")
-        self.configure(bg=C["base"])
-        self.minsize(900, 500)
+        self.geometry("1280x760")
+        self.minsize(1000, 600)
         self._platform_set_icon()
 
         self.config_data = load_config(self._get_config_file())
@@ -916,9 +1050,23 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         if self.config_data.get("debug_logging", False):
             DebugLogger.set_enabled(True)
 
-        saved_theme = self.config_data.get("theme", "Catppuccin Mocha")
-        if saved_theme in THEMES:
-            C.update(THEMES[saved_theme])
+        apply_theme(self.config_data.get("theme", DEFAULT_THEME),
+                    self.config_data.get("accent", DEFAULT_ACCENT))
+        self.configure(bg=C["crust"])
+
+        # Main-window state that outlives a rebuild (theme changes rebuild the UI)
+        self._vms = []                 # dicts from the last refresh
+        self._iid_to_vm = {}
+        self._vm_filter = "all"
+        self._cluster_idx = -1
+        self._cluster_status = {}      # name -> (online, vm count)
+        self._loaded_cluster = None
+        self._notes_vm = None
+        self._popup = None
+        self._popup_anchor = None
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", self._on_search_changed)
+        self.notes_var = tk.StringVar()
 
         if not self.config_data.get("prereqs_ok"):
             self.update_idletasks()
@@ -929,12 +1077,14 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             self._save_config()
 
         self._platform_migrate_secrets()
-        self._build_ui()
-        self._populate_clusters()
-
         if self.config_data.get("clusters"):
-            self.cluster_listbox.select_set(0)
+            self._cluster_idx = 0
             self.current_cluster = self.config_data["clusters"][0]
+        self._build_ui()
+        self.bind("<Key>", self._on_key)
+        self.bind_all("<ButtonPress>", self._on_global_click, add="+")
+
+        if self.current_cluster:
             self.after(100, self._refresh_vms)
 
     def _save_config(self):
@@ -954,29 +1104,24 @@ class ProxmoxSpiceManagerBase(tk.Tk):
     # ── UI Construction ──────────────────────────────────────────────────────
     def _on_close(self):
         self._closing = True
-        if hasattr(self, "_notes_combo") and self._notes_combo:
-            self._notes_combo.destroy()
-            self._notes_combo = None
+        self._commit_note()
         for child in self.winfo_children():
             if isinstance(child, tk.Toplevel):
                 child.destroy()
         self.quit()
         self.destroy()
 
-    # ── Debug Logging UI ────────────────────────────────────────────────────
-    def _update_debug_log_ui(self):
-        on = DebugLogger.enabled
-        self._debug_toggle_btn.config(
-            text="Debug Log: ON" if on else "Debug Log: OFF",
-            fg=C["green"] if on else C["subtext0"],
-        )
-
+    # ── Debug Logging ───────────────────────────────────────────────────────
     def _toggle_debug_log(self):
         new_state = not DebugLogger.enabled
         DebugLogger.set_enabled(new_state)
         self.config_data["debug_logging"] = new_state
         self._save_config()
-        self._update_debug_log_ui()
+        self.status_label.config(
+            text=f"Debug logging on — {DebugLogger.log_file_path()}" if new_state
+            else "Debug logging off",
+            fg=C["subtext0"],
+        )
 
     def _open_debug_log(self):
         path = DebugLogger.log_file_path()
@@ -990,95 +1135,10 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             )
 
     def _build_ui(self):
+        self._close_popup()
         for widget in self.winfo_children():
             widget.destroy()
-        self.configure(bg=C["base"])
-
-        version = self._get_app_version()
-
-        # Header
-        header = tk.Frame(self, bg=C["crust"], height=52)
-        header.pack(fill="x")
-        header.pack_propagate(False)
-
-        title_frame = tk.Frame(header, bg=C["crust"])
-        title_frame.pack(side="left", padx=16)
-        tk.Label(
-            title_frame, text="◈", bg=C["crust"], fg=C["mauve"],
-            font=(FONT, 18),
-        ).pack(side="left", padx=(0, 8))
-        tk.Label(
-            title_frame, text=f"Proxmox SPICE Manager v{version}",
-            bg=C["crust"], fg=C["text"], font=(FONT, 12, "bold"),
-        ).pack(side="left")
-
-        links_frame = tk.Frame(title_frame, bg=C["crust"])
-        links_frame.pack(side="left", padx=(12, 0))
-        gh_link = tk.Label(
-            links_frame, text="GitHub", bg=C["crust"], fg=C["blue"],
-            font=(FONT, 9, "underline"), cursor="hand2",
-        )
-        gh_link.pack(side="left")
-        gh_link.bind("<Button-1>", lambda e: webbrowser.open(
-            "https://github.com/darthrater78/proxmoxspicemanager"))
-        tk.Label(
-            links_frame, text=" · ", bg=C["crust"], fg=C["overlay0"],
-            font=(FONT, 9),
-        ).pack(side="left")
-        rn_link = tk.Label(
-            links_frame, text="Release Notes", bg=C["crust"], fg=C["blue"],
-            font=(FONT, 9, "underline"), cursor="hand2",
-        )
-        rn_link.pack(side="left")
-        release_version = version.replace("-win", "")
-        rn_link.bind("<Button-1>", lambda e: webbrowser.open(
-            f"https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v{release_version}"))
-
-        hbtn = {
-            "bg": C["crust"], "fg": C["subtext0"], "relief": "flat",
-            "font": (FONT, 9), "padx": 10, "pady": 4,
-            "activebackground": C["mantle"], "activeforeground": C["text"],
-        }
-
-        self._platform_header_buttons(header)
-
-        HoverButton(
-            header, text="Check Prerequisites",
-            command=self._recheck_prereqs,
-            hover_bg=C["mantle"], hover_fg=C["text"], **hbtn,
-        ).pack(side="right", padx=(0, 4))
-
-        HoverButton(
-            header, text="Open Log",
-            command=self._open_debug_log,
-            hover_bg=C["mantle"], hover_fg=C["text"], **hbtn,
-        ).pack(side="right", padx=(0, 4))
-
-        self._debug_toggle_btn = HoverButton(
-            header, text="Debug Log: OFF",
-            command=self._toggle_debug_log,
-            hover_bg=C["mantle"], hover_fg=C["text"], **hbtn,
-        )
-        self._debug_toggle_btn.pack(side="right", padx=(0, 4))
-        self._update_debug_log_ui()
-
-        theme_frame = tk.Frame(header, bg=C["crust"])
-        theme_frame.pack(side="right", padx=(0, 8))
-        tk.Label(
-            theme_frame, text="Theme:", bg=C["crust"], fg=C["overlay0"],
-            font=(FONT, 9),
-        ).pack(side="left", padx=(0, 6))
-
-        self.theme_var = tk.StringVar(
-            value=self.config_data.get("theme", "Catppuccin Mocha")
-        )
-        theme_menu = ttk.Combobox(
-            theme_frame, textvariable=self.theme_var,
-            values=list(THEMES.keys()), state="readonly", width=18,
-            font=(FONT, 9),
-        )
-        theme_menu.pack(side="left")
-        theme_menu.bind("<<ComboboxSelected>>", self._on_theme_change)
+        self.configure(bg=C["crust"])
 
         style = ttk.Style()
         style.theme_use("clam")
@@ -1093,296 +1153,759 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             foreground=[("readonly", C["text"])],
             background=[("readonly", C["surface1"])],
         )
-
-        tk.Frame(self, bg=C["mauve"], height=2).pack(fill="x")
-
-        # Body
-        body = tk.Frame(self, bg=C["base"])
-        body.pack(fill="both", expand=True)
-
-        # Sidebar
-        sidebar = tk.Frame(body, bg=C["mantle"], width=200)
-        sidebar.pack(side="left", fill="y")
-        sidebar.pack_propagate(False)
-
-        tk.Label(
-            sidebar, text="CLUSTERS", bg=C["mantle"], fg=C["overlay0"],
-            font=(FONT, 8, "bold"), anchor="w",
-        ).pack(fill="x", padx=14, pady=(14, 6))
-        tk.Frame(sidebar, bg=C["surface0"], height=1).pack(
-            fill="x", padx=12, pady=(0, 6)
-        )
-
-        self.cluster_listbox = tk.Listbox(
-            sidebar, bg=C["mantle"], fg=C["text"],
-            selectbackground=C["surface0"], selectforeground=C["blue"],
-            relief="flat", font=(FONT, 10), highlightthickness=0,
-            activestyle="none", borderwidth=0,
-        )
-        self.cluster_listbox.pack(fill="both", expand=True, padx=6, pady=(0, 6))
-        self.cluster_listbox.bind("<<ListboxSelect>>", self._on_cluster_select)
-
-        tk.Frame(sidebar, bg=C["surface0"], height=1).pack(fill="x", padx=12)
-
-        sb_btn = {
-            "bg": C["surface0"], "fg": C["subtext0"], "relief": "flat",
-            "padx": 10, "pady": 4, "font": (FONT, 9),
-            "activebackground": C["surface1"], "activeforeground": C["text"],
-        }
-
-        btn_bar = tk.Frame(sidebar, bg=C["mantle"])
-        btn_bar.pack(fill="x", padx=8, pady=(10, 0))
-        HoverButton(
-            btn_bar, text="+ Add", command=self._add_cluster,
-            hover_bg=C["surface1"], hover_fg=C["text"], **sb_btn,
-        ).pack(side="left", padx=(0, 4))
-        HoverButton(
-            btn_bar, text="Edit", command=self._edit_cluster,
-            hover_bg=C["surface1"], hover_fg=C["text"], **sb_btn,
-        ).pack(side="left", padx=(0, 4))
-        HoverButton(
-            btn_bar, text="Remove", command=self._remove_cluster,
-            hover_bg=C["surface1"], hover_fg=C["red"], **sb_btn,
-        ).pack(side="left")
-
-        io_bar = tk.Frame(sidebar, bg=C["mantle"])
-        io_bar.pack(fill="x", padx=8, pady=(6, 10))
-        HoverButton(
-            io_bar, text="Import", command=self._import_config,
-            hover_bg=C["surface1"], hover_fg=C["text"], **sb_btn,
-        ).pack(side="left", padx=(0, 4), expand=True, fill="x")
-        HoverButton(
-            io_bar, text="Export", command=self._export_config,
-            hover_bg=C["surface1"], hover_fg=C["text"], **sb_btn,
-        ).pack(side="left", expand=True, fill="x")
-
-        tk.Frame(body, bg=C["surface0"], width=1).pack(side="left", fill="y")
-
-        # Content
-        content = tk.Frame(body, bg=C["base"])
-        content.pack(side="right", fill="both", expand=True)
-
-        toolbar = tk.Frame(content, bg=C["base"])
-        toolbar.pack(fill="x", padx=16, pady=(14, 0))
-
-        self.status_label = tk.Label(
-            toolbar, text="Select a cluster to view VMs", bg=C["base"],
-            fg=C["overlay0"], font=(FONT, 10), anchor="w",
-        )
-        self.status_label.pack(side="left")
-
-        HoverButton(
-            toolbar, text="Refresh", command=self._refresh_vms,
-            bg=C["surface0"], fg=C["subtext0"], relief="flat", padx=12,
-            pady=4, hover_bg=C["surface1"], hover_fg=C["text"],
-            font=(FONT, 9),
-        ).pack(side="right")
-
-        self._all_vm_rows = []
-        self._checked_items = set()
-        self._notes_combo = None
-        self._active_filters = {}
-        self._filter_popup = None
-
-        # VM Table
-        table_frame = tk.Frame(content, bg=C["base"])
-        table_frame.pack(fill="both", expand=True, padx=16, pady=(10, 0))
-
-        columns = ("check", "vmid", "name", "ip", "node", "pool", "snaps", "status", "notes")
-        self.vm_tree = ttk.Treeview(
-            table_frame, columns=columns, show="headings",
-            selectmode="extended", height=12,
-        )
-
         style.configure(
-            "Treeview", background=C["surface0"], foreground=C["text"],
-            fieldbackground=C["surface0"], rowheight=32,
-            font=(FONT, 10), borderwidth=0,
+            "Vertical.TScrollbar", background=C["surface1"], troughcolor=C["base"],
+            arrowcolor=C["overlay0"], borderwidth=0, relief="flat",
         )
+        style.map("Vertical.TScrollbar", background=[("active", C["surface2"])])
         style.configure(
-            "Treeview.Heading", background=C["surface1"],
-            foreground=C["subtext0"], font=(FONT, 9, "bold"),
-            borderwidth=0, relief="flat",
+            "Vm.Treeview", background=C["base"], fieldbackground=C["base"],
+            foreground=C["text"], rowheight=30, font=(FONT, 10), borderwidth=0,
         )
         style.map(
-            "Treeview",
+            "Vm.Treeview",
             background=[("selected", C["surface1"])],
-        )
-        style.map("Treeview.Heading", background=[("active", C["surface2"])])
-
-        self.vm_tree.heading(
-            "check", text="☐", command=self._toggle_all_checks,
-        )
-        self.vm_tree.column(
-            "check", width=40, minwidth=40, anchor="center", stretch=False,
-        )
-        for col in columns:
-            if col == "check":
-                continue
-            self.vm_tree.heading(
-                col, text=col.upper(),
-                command=lambda c=col: self._sort_tree(c),
-            )
-
-        self.vm_tree.column("vmid", width=70, minwidth=50, anchor="center")
-        self.vm_tree.column("name", width=220, minwidth=120)
-        self.vm_tree.column("ip", width=130, minwidth=80)
-        self.vm_tree.column("node", width=120, minwidth=80)
-        self.vm_tree.column("pool", width=100, minwidth=60)
-        self.vm_tree.column("snaps", width=70, minwidth=50, anchor="center")
-        self.vm_tree.column("status", width=110, minwidth=70, anchor="center")
-        self.vm_tree.column("notes", width=120, minwidth=60)
-
-        self._all_columns = list(columns)
-        self._data_columns = [c for c in columns if c != "check"]
-        if not hasattr(self, "_tree_sort_col"):
-            self._tree_sort_col = None
-            self._tree_sort_asc = True
-        if not hasattr(self, "_display_columns"):
-            self._display_columns = list(columns)
-        elif set(self._display_columns) != set(columns):
-            self._display_columns = list(columns)
-        self._drag_col = None
-        self._drag_start_x = None
-
-        self.vm_tree.bind("<ButtonPress-1>", self._on_heading_press)
-        self.vm_tree.bind("<B1-Motion>", self._on_heading_drag)
-        self.vm_tree.bind("<ButtonRelease-1>", self._on_heading_release)
-        self.vm_tree.bind("<Button-3>", self._on_heading_right_click)
-        self.vm_tree.bind("<Motion>", self._show_heading_tooltip)
-        self.vm_tree.bind("<Leave>", self._hide_heading_tooltip)
-
-        saved_order = self.config_data.get("column_order")
-        if saved_order and set(saved_order) == set(self._data_columns):
-            self._display_columns = ["check"] + saved_order
-        self.vm_tree["displaycolumns"] = self._display_columns
-
-        if self._tree_sort_col:
-            for c in self._data_columns:
-                label = c.upper()
-                if c == self._tree_sort_col:
-                    label += "  ▲" if self._tree_sort_asc else "  ▼"
-                self.vm_tree.heading(c, text=label)
-
-        scrollbar = ttk.Scrollbar(
-            table_frame, orient="vertical", command=self.vm_tree.yview
+            foreground=[("selected", C["text"])],
         )
         style.configure(
-            "Vertical.TScrollbar", background=C["surface0"],
-            troughcolor=C["surface0"], arrowcolor=C["overlay0"], borderwidth=0,
+            "Vm.Treeview.Heading", background=C["base"], foreground=C["overlay1"],
+            font=(FONT, 8, "bold"), borderwidth=0, relief="flat", padding=(6, 4),
         )
-        self.vm_tree.configure(yscrollcommand=scrollbar.set)
-        self.vm_tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        self.vm_tree.bind("<Double-1>", self._on_vm_double_click)
+        style.map("Vm.Treeview.Heading", background=[("active", C["base"])])
+        style.layout("Vm.Treeview", [("Vm.Treeview.treearea", {"sticky": "nswe"})])
 
-        # Bottom bar
-        tk.Frame(content, bg=C["surface0"], height=1).pack(fill="x", padx=16)
-        bottom = tk.Frame(content, bg=C["base"])
-        bottom.pack(fill="x", padx=16, pady=12)
+        sidebar = tk.Frame(self, bg=C["crust"], width=232)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+        self._build_sidebar(sidebar)
 
-        HoverButton(
-            bottom, text=" Launch SPICE ", command=self._launch_spice,
-            bg=C["green"], fg=C["crust"], relief="flat", padx=16, pady=8,
-            hover_bg=C["teal"], hover_fg=C["crust"],
-            font=(FONT, 11, "bold"),
-        ).pack(side="right")
+        card = tk.Frame(self, bg=C["base"], highlightthickness=1,
+                        highlightbackground=C["surface0"])
+        card.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=8)
+        inspector = tk.Frame(card, bg=C["mantle"], width=290)
+        inspector.pack(side="right", fill="y")
+        inspector.pack_propagate(False)
+        tk.Frame(card, bg=C["surface0"], width=1).pack(side="right", fill="y")
+        main = tk.Frame(card, bg=C["base"])
+        main.pack(side="left", fill="both", expand=True, padx=(24, 16), pady=(20, 12))
 
-        self._platform_bottom_buttons(bottom)
-
-        power_frame = tk.Frame(bottom, bg=C["base"])
-        power_frame.pack(side="left")
-
-        pbtn = {"relief": "flat", "padx": 10, "pady": 8, "font": (FONT, 10)}
-        HoverButton(
-            power_frame, text=" Start ", command=self._start_vm,
-            bg=C["surface0"], fg=C["green"], hover_bg=C["surface1"],
-            hover_fg=C["green"], **pbtn,
-        ).pack(side="left", padx=(0, 4))
-        HoverButton(
-            power_frame, text=" Shutdown ", command=self._shutdown_vm,
-            bg=C["surface0"], fg=C["yellow"], hover_bg=C["surface1"],
-            hover_fg=C["yellow"], **pbtn,
-        ).pack(side="left", padx=(0, 4))
-        HoverButton(
-            power_frame, text=" Reboot ", command=self._reboot_vm,
-            bg=C["surface0"], fg=C["peach"], hover_bg=C["surface1"],
-            hover_fg=C["peach"], **pbtn,
-        ).pack(side="left", padx=(0, 4))
-        HoverButton(
-            power_frame, text=" Force Stop ", command=self._stop_vm,
-            bg=C["surface0"], fg=C["red"], hover_bg=C["surface1"],
-            hover_fg=C["red"], **pbtn,
-        ).pack(side="left", padx=(0, 4))
-        HoverButton(
-            power_frame, text=" Snapshots ", command=self._show_snapshots,
-            bg=C["surface0"], fg=C["lavender"], hover_bg=C["surface1"],
-            hover_fg=C["lavender"], **pbtn,
-        ).pack(side="left", padx=(0, 4))
-        HoverButton(
-            power_frame, text=" Quick Rollback ",
-            command=self._quick_rollback,
-            bg=C["surface0"], fg=C["peach"], hover_bg=C["surface1"],
-            hover_fg=C["peach"], **pbtn,
-        ).pack(side="left", padx=(0, 4))
-        HoverButton(
-            power_frame, text=" Notes ⚙ ", command=self._manage_note_options,
-            bg=C["surface0"], fg=C["subtext0"], hover_bg=C["surface1"],
-            hover_fg=C["text"], **pbtn,
-        ).pack(side="left")
-
-        self._check_count_label = tk.Label(
-            bottom, text="", bg=C["base"], fg=C["sapphire"],
-            font=(FONT, 9),
-        )
-        self._check_count_label.pack(side="left", padx=(12, 0))
-
-    # ── Theme ────────────────────────────────────────────────────────────────
-    def _on_theme_change(self, event=None):
-        theme_name = self.theme_var.get()
-        if theme_name not in THEMES:
-            return
-        C.update(THEMES[theme_name])
-        self.config_data["theme"] = theme_name
-        self._save_config()
-
-        selected_idx = None
-        sel = self.cluster_listbox.curselection()
-        if sel:
-            selected_idx = sel[0]
-
-        self._build_ui()
+        self._build_list(main)
+        self._build_inspector(inspector)
         self._populate_clusters()
+        self._render_vms()
 
-        if selected_idx is not None:
-            self.cluster_listbox.select_set(selected_idx)
-            clusters = self.config_data.get("clusters", [])
-            if selected_idx < len(clusters):
-                self.current_cluster = clusters[selected_idx]
+    # ── Sidebar ──────────────────────────────────────────────────────────────
+    def _build_sidebar(self, sidebar):
+        brand = tk.Frame(sidebar, bg=C["crust"])
+        brand.pack(fill="x", padx=20, pady=(18, 22))
+        logo = tk.Canvas(brand, width=28, height=28, bg=C["crust"], highlightthickness=0)
+        round_rect(logo, 0, 0, 28, 28, 7, fill=C["accent"], outline="")
+        logo.create_rectangle(8, 8, 20, 16, outline=C["on_accent"], width=1.6)
+        logo.create_line(11, 21, 17, 21, fill=C["on_accent"], width=1.6)
+        logo.create_line(14, 16, 14, 21, fill=C["on_accent"], width=1.6)
+        logo.pack(side="left")
+        names = tk.Frame(brand, bg=C["crust"])
+        names.pack(side="left", padx=(10, 0))
+        tk.Label(names, text="SPICE Manager", bg=C["crust"], fg=C["text"],
+                 font=(FONT, 11, "bold")).pack(anchor="w")
+        tk.Label(names, text=f"for Proxmox VE · v{self._get_app_version()}",
+                 bg=C["crust"], fg=C["subtext0"], font=(FONT, 8)).pack(anchor="w")
 
-        if self.current_cluster:
-            self.after(100, self._refresh_vms)
+        bottom = tk.Frame(sidebar, bg=C["crust"])
+        bottom.pack(side="bottom", fill="x", padx=(12, 8), pady=(0, 10))
+        tk.Frame(bottom, bg=C["surface1"], height=1).pack(fill="x", padx=8, pady=(0, 6))
+        nav = {"bg": C["crust"], "border": C["crust"], "hover_bg": C["surface0"], "pady": 5}
+        ActionButton(bottom, "Add cluster", self._add_cluster, icon="+", **nav).pack(fill="x")
+        row = tk.Frame(bottom, bg=C["crust"])
+        row.pack(fill="x")
+        self._appearance_btn = self._build_appearance_button(row)
+        self._appearance_btn.pack(side="right", padx=(4, 0))
+        self._settings_btn = ActionButton(row, "Settings", self._open_settings, icon="⚙", **nav)
+        self._settings_btn.pack(side="left", fill="x", expand=True)
+
+        tk.Label(sidebar, text="Clusters", bg=C["crust"], fg=C["subtext0"],
+                 font=(FONT, 9)).pack(anchor="w", padx=22, pady=(0, 6))
+        self._cluster_frame = tk.Frame(sidebar, bg=C["crust"])
+        self._cluster_frame.pack(fill="both", expand=True, padx=(12, 8))
+
+    def _build_appearance_button(self, parent):
+        """Quick switch: the current accent over the current theme, and a chevron."""
+        bg = C["surface0"]
+        canvas = tk.Canvas(parent, width=48, height=28, bg=bg, cursor="hand2",
+                           highlightthickness=1, highlightbackground=C["surface1"])
+        canvas.create_oval(9, 9, 19, 19, fill=C["accent"], outline="")
+        canvas.create_oval(16, 9, 26, 19, fill=C["base"], outline=C["surface2"])
+        canvas.create_line(31, 12, 35, 16, 39, 12, fill=C["subtext1"], width=1.4)
+        canvas.bind("<Button-1>", lambda e: self._open_appearance())
+        canvas.bind("<Enter>", lambda e: canvas.config(bg=C["surface1"]))
+        canvas.bind("<Leave>", lambda e: canvas.config(bg=bg))
+        return canvas
+
+    # ── VM list ──────────────────────────────────────────────────────────────
+    def _build_list(self, main):
+        header = tk.Frame(main, bg=C["base"])
+        header.pack(fill="x", pady=(0, 2))
+
+        tools = tk.Frame(header, bg=C["base"])
+        tools.pack(side="right", anchor="n", pady=(4, 0))
+        search = tk.Frame(tools, bg=C["mantle"], highlightthickness=1,
+                          highlightbackground=C["surface1"])
+        search.pack(side="left", padx=(0, 8))
+        tk.Label(search, text="⚲", bg=C["mantle"], fg=C["overlay1"],
+                 font=(FONT, 11)).pack(side="left", padx=(8, 0))
+        self._search_key = KeyCap(search, "/", C["mantle"])
+        self._search_key.pack(side="right", padx=(0, 8))
+        self.search_entry = tk.Entry(
+            search, textvariable=self.search_var, bg=C["mantle"], fg=C["text"],
+            insertbackground=C["text"], relief="flat", width=20, font=(FONT, 10),
+            highlightthickness=0, bd=0,
+        )
+        self.search_entry.pack(side="left", padx=(6, 6), pady=6)
+        self._search_hint = tk.Label(search, text="Search VMs", bg=C["mantle"],
+                                     fg=C["overlay1"], font=(FONT, 10))
+        self._search_hint.bind("<Button-1>", lambda e: self.search_entry.focus_set())
+        self.search_entry.bind("<FocusIn>", lambda e: self._update_search_hint())
+        self.search_entry.bind("<FocusOut>", lambda e: self._update_search_hint())
+        self._update_search_hint()
+        ActionButton(tools, "Refresh", self._refresh_vms, icon="⟳", key="F5",
+                     pady=4).pack(side="left")
+
+        titles = tk.Frame(header, bg=C["base"])
+        titles.pack(side="left", fill="x", expand=True)
+        self.cluster_title = tk.Label(
+            titles, text=self.current_cluster["name"] if self.current_cluster else "No cluster",
+            bg=C["base"], fg=C["text"], font=(FONT, 20, "bold"), anchor="w",
+        )
+        self.cluster_title.pack(fill="x")
+        self.status_label = tk.Label(
+            main, text="" if self.config_data.get("clusters") else "Add a cluster to get started",
+            bg=C["base"], fg=C["subtext0"], font=(FONT, 10), anchor="w",
+        )
+        self.status_label.pack(fill="x", pady=(0, 14), after=header)
+
+        chips = tk.Frame(main, bg=C["base"])
+        chips.pack(fill="x", pady=(0, 8))
+        self._chips = {}
+        for key in ("all", "running", "stopped"):
+            chip = tk.Label(chips, padx=12, pady=3, font=(FONT, 10), cursor="hand2",
+                            highlightthickness=1)
+            chip.pack(side="left", padx=(0, 6))
+            chip.bind("<Button-1>", lambda e, k=key: self._set_vm_filter(k))
+            self._chips[key] = chip
+
+        table = tk.Frame(main, bg=C["base"])
+        table.pack(fill="both", expand=True)
+        columns = ("os", "name", "vmid", "ip", "pool", "snaps", "status", "notes")
+        tree = ttk.Treeview(table, columns=columns, show="headings",
+                            selectmode="extended", style="Vm.Treeview")
+        headings = {"os": "", "name": "NAME", "vmid": "ID", "ip": "ADDRESS",
+                    "pool": "POOL", "snaps": "SNAPS", "status": "STATUS", "notes": "NOTES"}
+        # Fits the default window; name and notes take any extra width
+        widths = {"os": (42, False), "name": (170, True), "vmid": (48, False),
+                  "ip": (110, False), "pool": (84, False), "snaps": (52, False),
+                  "status": (100, False), "notes": (100, True)}
+        for col in columns:
+            tree.heading(col, text=headings[col], anchor="w")
+            width, stretch = widths[col]
+            tree.column(col, width=width, minwidth=40, stretch=stretch, anchor="w")
+        tree.tag_configure("group", foreground=C["subtext1"], font=(FONT, 9, "bold"))
+        tree.tag_configure("running", foreground=C["text"])
+        tree.tag_configure("stopped", foreground=C["overlay1"])
+        scrollbar = ttk.Scrollbar(table, orient="vertical", command=tree.yview)
+
+        def autohide(first, last):
+            # Only show the scrollbar when the list doesn't fit
+            if float(first) <= 0 and float(last) >= 1:
+                scrollbar.pack_forget()
+            elif not scrollbar.winfo_ismapped():
+                scrollbar.pack(side="right", fill="y", before=tree)
+            scrollbar.set(first, last)
+
+        tree.configure(yscrollcommand=autohide)
+        tree.pack(side="left", fill="both", expand=True)
+        tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        tree.bind("<Double-1>", self._on_vm_double_click)
+        self.vm_tree = tree
+        self._empty_label = tk.Label(table, bg=C["base"], fg=C["overlay1"], font=(FONT, 10))
+
+    def _update_search_hint(self):
+        if not hasattr(self, "_search_hint"):
+            return
+        empty = not self.search_var.get()
+        if empty and self.focus_get() is not self.search_entry:
+            self._search_hint.place(in_=self.search_entry, x=0, rely=0.5, anchor="w")
+        else:
+            self._search_hint.place_forget()
+        if empty:
+            self._search_key.pack(side="right", padx=(0, 8))
+        else:
+            self._search_key.pack_forget()
+
+    def _on_search_changed(self, *_):
+        self._update_search_hint()
+        if hasattr(self, "vm_tree"):
+            self._render_vms()
+
+    def _set_vm_filter(self, key):
+        self._vm_filter = key
+        self._render_vms()
+
+    def _update_chips(self):
+        running = sum(1 for vm in self._vms if vm["status"] == "running")
+        counts = {"all": len(self._vms), "running": running,
+                  "stopped": len(self._vms) - running}
+        labels = {"all": "All", "running": "Running", "stopped": "Stopped"}
+        for key, chip in self._chips.items():
+            on = key == self._vm_filter
+            chip.config(
+                text=f"{labels[key]}  {counts[key]}",
+                bg=C["accent"] if on else C["surface0"],
+                fg=C["on_accent"] if on else C["text"],
+                highlightbackground=C["accent"] if on else C["surface1"],
+                font=(FONT, 10, "bold") if on else (FONT, 10),
+            )
+
+    def _vm_matches(self, vm, query):
+        running = vm["status"] == "running"
+        if self._vm_filter == "running" and not running:
+            return False
+        if self._vm_filter == "stopped" and running:
+            return False
+        if not query:
+            return True
+        fields = (vm["name"], str(vm["vmid"]), vm["ip"], vm["node"], vm["pool"],
+                  vm["note"], os_label(vm["ostype"]))
+        return any(query in f.lower() for f in fields)
+
+    def _render_vms(self, keep=None):
+        """Redraw the table from self._vms, grouped by node, keeping the selection."""
+        tree = self.vm_tree
+        if keep is None:
+            keep = {vm["vmid"] for vm in self._get_selected_vms()}
+        tree.delete(*tree.get_children())
+        self._iid_to_vm = {}
+        query = self.search_var.get().strip().lower()
+        visible = [vm for vm in self._vms if self._vm_matches(vm, query)]
+        for node in sorted({vm["node"] for vm in visible}):
+            vms = sorted((vm for vm in visible if vm["node"] == node), key=lambda v: v["vmid"])
+            running = sum(1 for vm in vms if vm["status"] == "running")
+            group = f"node:{node}"
+            tree.insert("", "end", iid=group, open=True, tags=("group",), values=(
+                "", node, "", "", "", "", f"{running}/{len(vms)} running", ""))
+            for vm in vms:
+                iid = f"vm:{vm['vmid']}"
+                is_running = vm["status"] == "running"
+                status = "● Running" if is_running else f"○ {vm['status'].title() or 'Unknown'}"
+                tree.insert(group, "end", iid=iid, tags=("running" if is_running else "stopped",),
+                            values=(os_badge(vm["ostype"]), vm["name"], vm["vmid"],
+                                    vm["ip"] or "—", vm["pool"] or "—", vm["snaps"],
+                                    status, vm["note"]))
+                self._iid_to_vm[iid] = vm
+        self._update_chips()
+
+        if visible:
+            self._empty_label.place_forget()
+        else:
+            if self._vms:
+                text = "No VMs match the filter"
+            elif self.current_cluster:
+                text = "No SPICE VMs loaded"
+            else:
+                text = "Add a cluster to see its VMs"
+            self._empty_label.config(text=text)
+            self._empty_label.place(relx=0.5, rely=0.4, anchor="center")
+
+        selection = [f"vm:{vmid}" for vmid in keep if f"vm:{vmid}" in self._iid_to_vm]
+        if not selection and self._iid_to_vm:
+            selection = [next(iter(self._iid_to_vm))]
+        if selection:
+            tree.selection_set(selection)
+            tree.focus(selection[0])
+            tree.see(selection[0])
+        self._update_inspector()
+
+    def _focus_tree(self):
+        tree = self.vm_tree
+        if not tree.selection() and self._iid_to_vm:
+            first = next(iter(self._iid_to_vm))
+            tree.selection_set(first)
+            tree.focus(first)
+        tree.focus_set()
+
+    # ── Selection ────────────────────────────────────────────────────────────
+    def _get_selected_vms(self):
+        if not hasattr(self, "vm_tree"):
+            return []
+        return [self._iid_to_vm[iid] for iid in self.vm_tree.selection()
+                if iid in self._iid_to_vm]
+
+    def _get_selected_vm(self):
+        vms = self._get_selected_vms()
+        if len(vms) == 1:
+            return vms[0]
+        messagebox.showinfo(
+            "Single Selection",
+            "Select a VM first." if not vms else "Select a single VM.",
+            parent=self,
+        )
+        return None
+
+    def _on_tree_select(self, event=None):
+        groups = [iid for iid in self.vm_tree.selection() if iid not in self._iid_to_vm]
+        if groups:
+            # Node headings aren't VMs; clicking one selects nothing
+            self.vm_tree.selection_remove(groups)
+            return
+        self._update_inspector()
+
+    def _on_vm_double_click(self, event):
+        iid = self.vm_tree.identify_row(event.y)
+        if iid not in self._iid_to_vm:
+            return None  # a node heading: the default binding folds it
+        self.vm_tree.selection_set(iid)
+        self._launch_spice()
+        return "break"
+
+    # ── Inspector ────────────────────────────────────────────────────────────
+    def _build_inspector(self, parent):
+        bg = C["mantle"]
+        self._insp_empty = tk.Label(
+            parent, text="Select a VM to see its\ndetails and actions.",
+            bg=bg, fg=C["overlay1"], font=(FONT, 10), justify="center",
+        )
+        insp = tk.Frame(parent, bg=bg)
+        self._insp = insp
+        body = tk.Frame(insp, bg=bg)
+        body.pack(fill="both", expand=True, padx=20, pady=(22, 18))
+
+        self._insp_caption = tk.Label(body, text="Selected", bg=bg, fg=C["subtext0"],
+                                      font=(FONT, 9), anchor="w")
+        self._insp_caption.pack(fill="x")
+        self._insp_name = tk.Label(body, bg=bg, fg=C["text"], font=(FONT, 16, "bold"),
+                                   anchor="w")
+        self._insp_name.pack(fill="x", pady=(2, 0))
+        sub = tk.Frame(body, bg=bg)
+        sub.pack(fill="x")
+        self._insp_os = tk.Label(sub, bg=bg, fg=C["subtext0"], font=(FONT, 10))
+        self._insp_os.pack(side="left")
+        tk.Label(sub, text=" · ", bg=bg, fg=C["subtext0"], font=(FONT, 10)).pack(side="left")
+        self._insp_state = tk.Label(sub, bg=bg, fg=C["green"], font=(FONT, 10))
+        self._insp_state.pack(side="left")
+
+        self._console_btn = ActionButton(
+            body, "Open SPICE console", self._launch_spice, key="Enter",
+            bg=C["accent"], fg=C["on_accent"], border=C["accent"],
+            hover_bg=mix(C["accent"], C["mantle"], 0.15), bold=True, pady=8,
+        )
+        self._console_btn.pack(fill="x", pady=(16, 0))
+
+        details = tk.Frame(body, bg=bg)
+        details.pack(fill="x", pady=(16, 0))
+        self._details = details
+        details.columnconfigure(1, weight=1)
+        self._detail = {}
+        for row, (key, label) in enumerate((("vmid", "VM ID"), ("ip", "Address"),
+                                            ("node", "Node"), ("pool", "Pool"))):
+            tk.Label(details, text=label, bg=bg, fg=C["subtext0"], font=(FONT, 10),
+                     anchor="w").grid(row=row, column=0, sticky="w", pady=(0, 6))
+            value = tk.Label(details, bg=bg, fg=C["text"], anchor="w",
+                             font=(MONO, 9) if key == "ip" else (FONT, 10))
+            value.grid(row=row, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
+            self._detail[key] = value
+        tk.Label(details, text="Notes", bg=bg, fg=C["subtext0"], font=(FONT, 10),
+                 anchor="w").grid(row=4, column=0, sticky="w")
+        notes = tk.Frame(details, bg=C["base"], highlightthickness=1,
+                         highlightbackground=C["surface1"])
+        notes.grid(row=4, column=1, sticky="ew", padx=(12, 0))
+        self._notes_menu_btn = tk.Label(notes, text="▾", bg=C["base"], fg=C["subtext1"],
+                                        font=(FONT, 10), padx=6, cursor="hand2")
+        self._notes_menu_btn.pack(side="right")
+        self._notes_menu_btn.bind("<Button-1>", lambda e: self._open_notes_menu())
+        self.notes_entry = tk.Entry(
+            notes, textvariable=self.notes_var, bg=C["base"], fg=C["text"],
+            insertbackground=C["text"], relief="flat", font=(FONT, 10),
+            highlightthickness=0, bd=0, width=10,
+        )
+        self.notes_entry.pack(side="left", fill="x", expand=True, padx=(6, 0), pady=4)
+        self.notes_entry.bind("<Return>", self._on_notes_return)
+        self.notes_entry.bind("<Escape>", self._on_notes_escape)
+        self.notes_entry.bind("<FocusOut>", lambda e: self._commit_note())
+
+        tk.Label(body, text="Actions", bg=bg, fg=C["subtext0"], font=(FONT, 9),
+                 anchor="w").pack(fill="x", pady=(20, 6))
+        self._action_btns = {}
+        for key, icon, text, hint, command in (
+            ("start", "▶", "Start", "S", self._start_vm),
+            ("shutdown", "↓", "Shut down", "Shift+S", self._shutdown_vm),
+            ("reboot", "↻", "Reboot", "R", self._reboot_vm),
+            ("snapshots", "◉", "Snapshots", "P", self._show_snapshots),
+            ("rollback", "↺", "Roll back to latest snapshot", "", self._quick_rollback),
+        ):
+            btn = ActionButton(body, text, command, icon=icon, key=hint, pady=5)
+            btn.pack(fill="x", pady=(0, 5))
+            self._action_btns[key] = btn
+
+        ActionButton(
+            body, "Force stop", self._stop_vm, icon="■", key="Ctrl+.", fg=C["red"], pady=5,
+        ).pack(side="bottom", fill="x")
+
+    def _update_inspector(self):
+        # Save an edit in progress to the VM it was typed for, before the panel moves on
+        self._commit_note()
+        if not hasattr(self, "_insp"):
+            return
+        vms = self._get_selected_vms()
+        if not vms:
+            self._notes_vm = None
+            self._insp.pack_forget()
+            self._insp_empty.place(relx=0.5, rely=0.45, anchor="center")
+            return
+        self._insp_empty.place_forget()
+        self._insp.pack(fill="both", expand=True)
+
+        running = sum(1 for vm in vms if vm["status"] == "running")
+        single = vms[0] if len(vms) == 1 else None
+        self._console_btn.set_enabled(running > 0)
+        self._action_btns["snapshots"].set_enabled(single is not None)
+        self._action_btns["rollback"].set_enabled(single is not None and single["snaps"] > 0)
+
+        if single:
+            self._insp_caption.config(text="Selected")
+            self._insp_name.config(text=single["name"])
+            self._insp_os.config(text=os_label(single["ostype"]))
+            is_running = single["status"] == "running"
+            self._insp_state.config(text=single["status"].title() or "Unknown",
+                                    fg=C["green"] if is_running else C["overlay1"])
+            self._console_btn.set_text("Open SPICE console")
+            self._detail["vmid"].config(text=single["vmid"])
+            self._detail["ip"].config(text=single["ip"] or "—")
+            self._detail["node"].config(text=single["node"])
+            self._detail["pool"].config(text=single["pool"] or "—")
+            self._details.pack(fill="x", pady=(16, 0), after=self._console_btn)
+            self.notes_var.set(single["note"])
+            self._notes_vm = single
+        else:
+            self._insp_caption.config(text="Selection")
+            self._insp_name.config(text=f"{len(vms)} VMs")
+            self._insp_os.config(text=f"{running} running")
+            self._insp_state.config(text=f"{len(vms) - running} stopped", fg=C["subtext0"])
+            self._console_btn.set_text("Open 1 console" if running == 1
+                                       else f"Open {running} consoles")
+            self._details.pack_forget()
+            self._notes_vm = None
+
+    # ── Notes ────────────────────────────────────────────────────────────────
+    def _commit_note(self):
+        vm = getattr(self, "_notes_vm", None)
+        if vm is None:
+            return
+        val = self.notes_var.get().strip()
+        if val == vm["note"]:
+            return
+        vm["note"] = val
+        if val and val not in self.config_data.get("note_options", []):
+            self.config_data.setdefault("note_options", []).append(val)
+        vm_notes = self.config_data.setdefault("vm_notes", {})
+        key = self._vm_note_key(vm["vmid"])
+        vm_notes.pop(str(vm["vmid"]), None)
+        if val:
+            vm_notes[key] = val
+        else:
+            vm_notes.pop(key, None)
+        self._save_config()
+        iid = f"vm:{vm['vmid']}"
+        if hasattr(self, "vm_tree") and self.vm_tree.exists(iid):
+            self.vm_tree.set(iid, "notes", val)
+
+    def _on_notes_return(self, event=None):
+        self._commit_note()
+        self._focus_tree()
+        return "break"
+
+    def _on_notes_escape(self, event=None):
+        if self._notes_vm is not None:
+            self.notes_var.set(self._notes_vm["note"])
+        self._focus_tree()
+        return "break"
+
+    def _set_note(self, text):
+        self.notes_var.set(text)
+        self._commit_note()
+
+    def _open_notes_menu(self):
+        if self._notes_vm is None:
+            return
+        entries = [(opt, lambda o=opt: self._set_note(o))
+                   for opt in self.config_data.get("note_options", [])]
+        if entries:
+            entries.append(None)
+        entries.append(("Clear note", lambda: self._set_note(""), bool(self.notes_var.get())))
+        entries.append(("Edit saved notes…", self._manage_note_options))
+        self._show_menu(self._notes_menu_btn, entries, above=False)
+
+    # ── Popups: menus and the appearance flyout ──────────────────────────────
+    def _close_popup(self, event=None):
+        popup = getattr(self, "_popup", None)
+        if popup is not None and popup.winfo_exists():
+            popup.destroy()
+        self._popup = None
+        self._popup_anchor = None
+
+    def _on_global_click(self, event):
+        popup = self._popup
+        if popup is None:
+            return
+        widget = str(event.widget)
+        inside = widget.startswith(str(popup))
+        on_anchor = self._popup_anchor is not None and widget.startswith(str(self._popup_anchor))
+        if not inside and not on_anchor:
+            self._close_popup()
+
+    def _open_popup(self, anchor, build, above=True, x=None):
+        """Show a borderless popup next to anchor; clicking the anchor again closes it."""
+        if self._popup is not None and self._popup_anchor is anchor:
+            self._close_popup()
+            return
+        self._close_popup()
+        popup = tk.Toplevel(self)
+        popup.wm_overrideredirect(True)
+        popup.configure(bg=C["mantle"], highlightthickness=1,
+                        highlightbackground=C["surface1"])
+        build(popup)
+        popup.update_idletasks()
+        if x is None:
+            x = anchor.winfo_rootx()
+        if above:
+            y = anchor.winfo_rooty() - popup.winfo_reqheight() - 6
+        else:
+            y = anchor.winfo_rooty() + anchor.winfo_height() + 4
+        popup.geometry(f"+{x}+{max(y, 0)}")
+        popup.lift()
+        popup.bind("<Escape>", self._close_popup)
+        popup.focus_set()
+        self._popup = popup
+        self._popup_anchor = anchor
+
+    def _show_menu(self, anchor, entries, above=True):
+        """entries: (label, action[, enabled]) tuples; None draws a separator."""
+        def build(popup):
+            frame = tk.Frame(popup, bg=C["mantle"])
+            frame.pack(padx=6, pady=6)
+            tk.Frame(frame, bg=C["mantle"], width=220, height=0).pack()
+            for entry in entries:
+                if entry is None:
+                    tk.Frame(frame, bg=C["surface1"], height=1).pack(fill="x", padx=4, pady=5)
+                    continue
+                label, action = entry[0], entry[1]
+                enabled = entry[2] if len(entry) > 2 else True
+                row = tk.Label(frame, text=label, bg=C["mantle"], anchor="w",
+                               fg=C["text"] if enabled else C["overlay0"],
+                               font=(FONT, 10), padx=10, pady=5,
+                               cursor="hand2" if enabled else "arrow")
+                row.pack(fill="x")
+                if enabled:
+                    row.bind("<Enter>", lambda e, r=row: r.config(bg=C["surface0"]))
+                    row.bind("<Leave>", lambda e, r=row: r.config(bg=C["mantle"]))
+                    row.bind("<Button-1>", lambda e, a=action: (self._close_popup(), a()))
+        self._open_popup(anchor, build, above=above)
+
+    def _open_settings(self):
+        result = self._get_selected_cluster()
+        name = result[1]["name"] if result else "cluster"
+        version = self._get_app_version()
+        entries = [
+            (f"Edit {name}…", self._edit_cluster, result is not None),
+            (f"Remove {name}…", self._remove_cluster, result is not None),
+            None,
+            ("Import clusters…", self._import_config),
+            ("Export clusters…", self._export_config),
+            None,
+            ("Debug log: on" if DebugLogger.enabled else "Debug log: off",
+             self._toggle_debug_log),
+            ("Open debug log", self._open_debug_log, DebugLogger.enabled),
+            ("Check prerequisites", self._recheck_prereqs),
+        ]
+        entries += self._platform_menu_entries()
+        entries += [
+            None,
+            ("GitHub", lambda: webbrowser.open(
+                "https://github.com/darthrater78/proxmoxspicemanager")),
+            (f"Release notes (v{version})", lambda: webbrowser.open(
+                "https://github.com/darthrater78/proxmoxspicemanager/releases/tag/"
+                f"v{version}")),
+        ]
+        self._show_menu(self._settings_btn, entries)
+
+    def _open_appearance(self):
+        theme = self.config_data.get("theme", DEFAULT_THEME)
+        accent = self.config_data.get("accent", DEFAULT_ACCENT)
+
+        def build(popup):
+            bg = C["mantle"]
+            body = tk.Frame(popup, bg=bg)
+            body.pack(padx=14, pady=12)
+            tk.Frame(body, bg=bg, width=290, height=0).pack()
+            tk.Label(body, text="Appearance", bg=bg, fg=C["text"],
+                     font=(FONT, 11, "bold"), anchor="w").pack(fill="x")
+            tk.Label(body, text="Theme", bg=bg, fg=C["subtext0"], font=(FONT, 9),
+                     anchor="w").pack(fill="x", pady=(10, 4))
+            for name, pal in THEMES.items():
+                selected = name == theme
+                row_bg = C["surface0"] if selected else bg
+                row = tk.Frame(body, bg=row_bg, cursor="hand2")
+                row.pack(fill="x", pady=1)
+                # Miniature of the theme: page, card, a line of text, the accent
+                mini = tk.Canvas(row, width=46, height=28, bg=row_bg, highlightthickness=0)
+                mini.create_rectangle(0, 0, 45, 27, fill=pal["crust"], outline=pal["surface1"])
+                mini.create_rectangle(12, 4, 41, 22, fill=pal["base"], outline="")
+                mini.create_rectangle(15, 8, 31, 10, fill=pal["subtext0"], outline="")
+                mini.create_rectangle(15, 14, 25, 17, fill=pal[ACCENTS[accent]], outline="")
+                mini.create_rectangle(3, 5, 9, 6, fill=pal["surface1"], outline="")
+                mini.create_rectangle(3, 9, 9, 10, fill=pal["surface1"], outline="")
+                mini.pack(side="left", padx=6, pady=4)
+                parts = [row, mini, tk.Label(row, text=name, bg=row_bg, fg=C["text"],
+                                             font=(FONT, 10))]
+                parts[-1].pack(side="left", padx=(4, 0))
+                if selected:
+                    parts.append(tk.Label(row, text="✓", bg=row_bg, fg=C["accent"],
+                                          font=(FONT, 11, "bold")))
+                    parts[-1].pack(side="right", padx=8)
+                for part in parts:
+                    part.bind("<Button-1>", lambda e, n=name: self._apply_appearance(theme=n))
+                    if not selected:
+                        part.bind("<Enter>", lambda e, ps=parts: [p.config(bg=C["surface0"]) for p in ps])
+                        part.bind("<Leave>", lambda e, ps=parts: [p.config(bg=bg) for p in ps])
+
+            head = tk.Frame(body, bg=bg)
+            head.pack(fill="x", pady=(12, 6))
+            tk.Label(head, text="Accent", bg=bg, fg=C["subtext0"], font=(FONT, 9)).pack(side="left")
+            tk.Label(head, text=f"{accent} (default)" if accent == DEFAULT_ACCENT else accent,
+                     bg=bg, fg=C["subtext0"], font=(FONT, 9)).pack(side="right")
+            swatches = tk.Frame(body, bg=bg)
+            swatches.pack(fill="x")
+            for name, slot in ACCENTS.items():
+                swatch = tk.Canvas(swatches, width=34, height=34, bg=bg,
+                                   highlightthickness=0, cursor="hand2")
+                if name == accent:
+                    swatch.create_oval(2, 2, 32, 32, outline=C["text"], width=2)
+                swatch.create_oval(6, 6, 28, 28, fill=C[slot], outline="")
+                swatch.pack(side="left", padx=(0, 4))
+                swatch.bind("<Button-1>", lambda e, n=name: self._apply_appearance(accent=n))
+
+        # Line the flyout up with the sidebar rather than with the small button
+        self._open_popup(self._appearance_btn, build, above=True, x=self.winfo_rootx() + 12)
+
+    def _apply_appearance(self, theme=None, accent=None):
+        theme = theme or self.config_data.get("theme", DEFAULT_THEME)
+        accent = accent or self.config_data.get("accent", DEFAULT_ACCENT)
+        self.config_data["theme"] = theme
+        self.config_data["accent"] = accent
+        self._save_config()
+        apply_theme(theme, accent)
+        keep = {vm["vmid"] for vm in self._get_selected_vms()}
+        self._build_ui()
+        self._render_vms(keep)
+        if self._loaded_cluster:
+            self._show_summary()
+        # Keep the flyout open so themes and accents can be compared
+        self.after(50, self._open_appearance)
+
+    # ── Keyboard ─────────────────────────────────────────────────────────────
+    def _on_key(self, event):
+        focus = self.focus_get()
+        key = event.keysym
+        ctrl = bool(event.state & 0x4)
+        if key == "F5":
+            self._refresh_vms()
+            return "break"
+        if isinstance(focus, (tk.Entry, ttk.Entry, tk.Text)):
+            if focus is getattr(self, "search_entry", None) and key in (
+                    "Escape", "Return", "KP_Enter", "Down"):
+                if key == "Escape":
+                    self.search_var.set("")
+                self._focus_tree()
+                return "break"
+            return None
+        if self._popup is not None:
+            if key == "Escape":
+                self._close_popup()
+                return "break"
+            return None
+        actions = {
+            "slash": lambda: self.search_entry.focus_set(),
+            "Return": self._launch_spice,
+            "KP_Enter": self._launch_spice,
+            "s": self._start_vm,
+            "S": self._shutdown_vm,
+            "r": self._reboot_vm,
+            "p": self._show_snapshots,
+        }
+        if ctrl:
+            if key == "period":
+                self._stop_vm()
+                return "break"
+            return None
+        action = actions.get(key)
+        if action is None:
+            return None
+        action()
+        return "break"
 
     # ── Clusters ─────────────────────────────────────────────────────────────
     def _populate_clusters(self):
-        self.cluster_listbox.delete(0, "end")
-        for cluster in self.config_data.get("clusters", []):
-            self.cluster_listbox.insert("end", f"  ◆  {cluster['name']}")
+        if not hasattr(self, "_cluster_frame"):
+            return
+        for widget in self._cluster_frame.winfo_children():
+            widget.destroy()
+        for idx, cluster in enumerate(self.config_data.get("clusters", [])):
+            selected = idx == self._cluster_idx
+            bg = C["surface0"] if selected else C["crust"]
+            row = tk.Frame(self._cluster_frame, bg=bg, cursor="hand2")
+            row.pack(fill="x", pady=1)
+            tk.Frame(row, bg=C["accent"] if selected else bg, width=3).pack(
+                side="left", fill="y", pady=8)
+            online = self._cluster_status.get(cluster["name"])
+            if online is None:
+                dot_color, count = C["surface2"], ""
+            elif online[0]:
+                dot_color, count = C["green"], str(online[1])
+            else:
+                dot_color, count = C["overlay0"], "offline"
+            dot = tk.Canvas(row, width=8, height=8, bg=bg, highlightthickness=0)
+            dot.create_oval(0, 0, 7, 7, fill=dot_color, outline="")
+            dot.pack(side="left", padx=(8, 10))
+            count_label = tk.Label(row, text=count, bg=bg, fg=C["subtext0"], font=(FONT, 9))
+            count_label.pack(side="right", padx=10)
+            name = tk.Label(row, text=cluster["name"], bg=bg, fg=C["text"],
+                            font=(FONT, 10), anchor="w")
+            name.pack(side="left", fill="x", expand=True, pady=8)
+            parts = (row, dot, count_label, name)
+            for part in parts:
+                part.bind("<Button-1>", lambda e, i=idx: self._select_cluster(i))
+                part.bind("<Double-Button-1>", lambda e: self._edit_cluster())
+                if not selected:
+                    part.bind("<Enter>", lambda e, ps=parts: [p.config(bg=C["mantle"]) for p in ps])
+                    part.bind("<Leave>", lambda e, ps=parts: [p.config(bg=C["crust"]) for p in ps])
 
     def _get_selected_cluster(self):
-        sel = self.cluster_listbox.curselection()
-        if not sel:
-            return None
-        idx = sel[0]
         clusters = self.config_data.get("clusters", [])
-        return (idx, clusters[idx]) if idx < len(clusters) else None
+        if 0 <= self._cluster_idx < len(clusters):
+            return self._cluster_idx, clusters[self._cluster_idx]
+        return None
 
-    def _on_cluster_select(self, event=None):
-        result = self._get_selected_cluster()
-        if result:
-            _, cluster = result
-            self.current_cluster = cluster
-            self._refresh_vms()
+    def _select_cluster(self, idx):
+        clusters = self.config_data.get("clusters", [])
+        if not 0 <= idx < len(clusters):
+            return
+        if idx == self._cluster_idx and clusters[idx] is self.current_cluster \
+                and self._loaded_cluster == clusters[idx]["name"]:
+            # Already showing it. Rebuilding the rows here would also swallow
+            # the second click of a double-click (edit); F5 refreshes.
+            return
+        self._cluster_idx = idx
+        self.current_cluster = clusters[idx]
+        self._populate_clusters()
+        self._refresh_vms()
 
     def _add_cluster(self):
         dlg = ClusterDialog(self, get_secret_fn=self._platform_get_secret)
@@ -1391,7 +1914,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             self._save_config()
             if dlg._pending_secret:
                 self._platform_save_secret(dlg.result["name"], dlg._pending_secret)
-            self._populate_clusters()
+            self._select_cluster(len(self.config_data["clusters"]) - 1)
 
     def _edit_cluster(self):
         result = self._get_selected_cluster()
@@ -1403,11 +1926,13 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         if dlg.result:
             if cluster.get("name") != dlg.result["name"]:
                 self._platform_delete_secret(cluster["name"])
+            self.auth_cache.pop(cluster["name"], None)
+            self._cluster_status.pop(cluster["name"], None)
             self.config_data["clusters"][idx] = dlg.result
             self._save_config()
             if dlg._pending_secret:
                 self._platform_save_secret(dlg.result["name"], dlg._pending_secret)
-            self._populate_clusters()
+            self._select_cluster(idx)
 
     def _remove_cluster(self):
         result = self._get_selected_cluster()
@@ -1416,11 +1941,22 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         idx, cluster = result
         if messagebox.askyesno("Confirm", f"Remove cluster '{cluster['name']}'?", parent=self):
             self._platform_delete_secret(cluster["name"])
+            self.auth_cache.pop(cluster["name"], None)
+            self._cluster_status.pop(cluster["name"], None)
             self.config_data["clusters"].pop(idx)
             self._save_config()
-            self._populate_clusters()
-            self.vm_tree.delete(*self.vm_tree.get_children())
-            self.current_cluster = None
+            self._vms = []
+            self._loaded_cluster = None
+            remaining = len(self.config_data["clusters"])
+            if remaining:
+                self._select_cluster(min(idx, remaining - 1))
+            else:
+                self._cluster_idx = -1
+                self.current_cluster = None
+                self.cluster_title.config(text="No cluster")
+                self.status_label.config(text="Add a cluster to get started", fg=C["subtext0"])
+                self._populate_clusters()
+                self._render_vms()
 
     # ── Import / Export ───────────────────────────────────────────────────────
     def _export_config(self):
@@ -1544,17 +2080,47 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         return None
 
     # ── VM Refresh ───────────────────────────────────────────────────────────
+    def _show_summary(self):
+        """Subtitle under the cluster name: VM and node counts, host, TLS state."""
+        cluster = self.current_cluster
+        if not cluster:
+            return
+        nodes = len({vm["node"] for vm in self._vms})
+        parts = [
+            "1 SPICE VM" if len(self._vms) == 1 else f"{len(self._vms)} SPICE VMs",
+            "1 node" if nodes == 1 else f"{nodes} nodes",
+        ]
+        host = urllib.parse.urlparse(cluster.get("host", "")).hostname
+        if host:
+            parts.append(host)
+        tls_off = cluster.get("skip_tls_verify", False)
+        if tls_off:
+            parts.append("⚠ TLS verification off")
+        self.status_label.config(text=" · ".join(parts),
+                                 fg=C["yellow"] if tls_off else C["subtext0"])
+
+    def _set_cluster_offline(self, cluster, message):
+        self._cluster_status[cluster["name"]] = (False, None)
+        self._populate_clusters()
+        self.status_label.config(text=message, fg=C["red"])
+
     def _refresh_vms(self):
         if not self.current_cluster:
             return
         cluster = self.current_cluster
+        self.cluster_title.config(text=cluster["name"])
+        if self._loaded_cluster != cluster["name"]:
+            # Don't leave another cluster's VMs on screen under this cluster's name
+            self._vms = []
+            self._loaded_cluster = None
+            self._render_vms()
         DebugLogger.log(f"[Refresh] Starting refresh for {cluster.get('name', '?')}")
         auth = self._get_auth(cluster)
         if not auth:
             DebugLogger.log("[Refresh] Auth failed — aborting refresh")
-            self.status_label.config(text="Auth failed", fg=C["red"])
+            self._set_cluster_offline(cluster, "Auth failed")
             return
-        self.status_label.config(text="Loading VMs...", fg=C["yellow"])
+        self.status_label.config(text=f"Loading VMs from {cluster['name']}...", fg=C["yellow"])
         self.update_idletasks()
 
         def fetch():
@@ -1563,17 +2129,13 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 "/api2/json/cluster/resources?type=vm", auth=auth,
             )
             if "error" in data:
-                self.after(0, lambda d=data: self.status_label.config(
-                    text=f"Error: {d['error']}", fg=C["red"]
-                ))
+                self.after(0, lambda d=data: self._set_cluster_offline(
+                    cluster, f"Error: {d['error']}"))
                 return
 
             all_vms = data.get("data", [])
             if not all_vms:
-                self.after(0, lambda: (
-                    self.vm_tree.delete(*self.vm_tree.get_children()),
-                    self.status_label.config(text="No VMs found", fg=C["red"]),
-                ))
+                self.after(0, lambda: update_ui([], 0))
                 return
 
             qemu_vms = [v for v in all_vms if v.get("type") == "qemu"]
@@ -1588,6 +2150,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 )
                 if "error" in config:
                     continue
+                vm["_ostype"] = str(config.get("data", {}).get("ostype", ""))
                 vga = str(config.get("data", {}).get("vga", "")).lower()
                 if "qxl" in vga or "spice" in vga:
                     snap_data = api_request(
@@ -1624,474 +2187,32 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                     vm["_ip_address"] = ip_addr
                     spice_vms.append(vm)
 
-            def update_ui():
-                self.vm_tree.delete(*self.vm_tree.get_children())
-                if not spice_vms:
-                    self._all_vm_rows = []
-                    self.status_label.config(
-                        text=f"No SPICE VMs found ({len(qemu_vms)} checked)",
-                        fg=C["red"],
-                    )
-                    return
+            self.after(0, lambda: update_ui(spice_vms, len(qemu_vms)))
 
-                spice_vms.sort(key=lambda v: v.get("vmid", 0))
-                self._all_vm_rows = []
-                for vm in spice_vms:
-                    status = vm.get("status", "?")
-                    display_status = "● running" if status == "running" else "○ stopped"
-                    tag = "running" if status == "running" else "stopped"
-                    snap_count = vm.get("_snap_count", 0)
-                    snap_display = f"📸 {snap_count}" if snap_count > 0 else "—"
-                    vmid_str = str(vm.get("vmid", "?"))
-                    note = self._lookup_vm_note(vmid_str)
-                    row = (
-                        vmid_str, vm.get("name", "unnamed"),
-                        vm.get("_ip_address", ""),
-                        vm.get("node", "?"), vm.get("pool", "—"),
-                        snap_display, display_status, note,
-                    )
-                    self._all_vm_rows.append((row, tag))
-
-                self._refresh_filter_dropdowns()
-                self._apply_filters()
-                DebugLogger.log(f"[Refresh] {len(spice_vms)} SPICE VMs found "
-                               f"(of {len(qemu_vms)} QEMU VMs)")
-                tls_warn = "  ⚠ TLS off" if cluster.get("skip_tls_verify", False) else ""
-                self.status_label.config(
-                    text=f"◈  {cluster['name']}  —  {len(spice_vms)} SPICE VMs{tls_warn}",
-                    fg=C["yellow"] if tls_warn else C["text"],
-                )
-
-                if hasattr(self, "_display_columns"):
-                    self.vm_tree["displaycolumns"] = self._display_columns
-                if self._tree_sort_col:
-                    self._reapply_sort()
-
-            self.after(0, update_ui)
+        def update_ui(spice_vms, qemu_count):
+            if self.current_cluster is not cluster or self._closing:
+                return  # the user moved on to another cluster meanwhile
+            keep = {vm["vmid"] for vm in self._get_selected_vms()}
+            self._vms = [{
+                "vmid": int(vm.get("vmid", 0)),
+                "name": vm.get("name", "unnamed"),
+                "node": vm.get("node", "?"),
+                "pool": vm.get("pool", ""),
+                "snaps": vm.get("_snap_count", 0),
+                "status": vm.get("status", ""),
+                "ip": vm.get("_ip_address", ""),
+                "ostype": vm.get("_ostype", ""),
+                "note": self._lookup_vm_note(vm.get("vmid", "")),
+            } for vm in spice_vms]
+            self._loaded_cluster = cluster["name"]
+            self._cluster_status[cluster["name"]] = (True, len(self._vms))
+            self._populate_clusters()
+            self._render_vms(keep)
+            DebugLogger.log(f"[Refresh] {len(spice_vms)} SPICE VMs found "
+                            f"(of {qemu_count} QEMU VMs)")
+            self._show_summary()
 
         threading.Thread(target=fetch, daemon=True).start()
-
-    # ── Filtering ────────────────────────────────────────────────────────────
-    def _on_heading_right_click(self, event):
-        if self._filter_popup and self._filter_popup.winfo_exists():
-            self._filter_popup.destroy()
-            self._filter_popup = None
-            return
-        region = self.vm_tree.identify_region(event.x, event.y)
-        if region != "heading":
-            return
-        col_id = self.vm_tree.identify_column(event.x)
-        if not col_id:
-            return
-        idx = int(col_id.replace("#", "")) - 1
-        if idx < 0 or idx >= len(self._display_columns):
-            return
-        col_name = self._display_columns[idx]
-        if col_name == "check":
-            return
-        self._show_filter_popup(col_name, event.x_root, event.y_root)
-
-    def _show_heading_tooltip(self, event):
-        region = self.vm_tree.identify_region(event.x, event.y)
-        if region == "heading":
-            col_id = self.vm_tree.identify_column(event.x)
-            if col_id:
-                idx = int(col_id.replace("#", "")) - 1
-                if 0 <= idx < len(self._display_columns) and self._display_columns[idx] != "check":
-                    if not hasattr(self, "_heading_tip") or not self._heading_tip or not self._heading_tip.winfo_exists():
-                        tip = tk.Toplevel(self)
-                        tip.wm_overrideredirect(True)
-                        lbl = tk.Label(
-                            tip, text="Right-click to filter", bg=C["surface2"],
-                            fg=C["subtext0"], font=(FONT, 8), padx=6, pady=2,
-                        )
-                        lbl.pack()
-                        tip.geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
-                        self._heading_tip = tip
-                    return
-        if hasattr(self, "_heading_tip") and self._heading_tip and self._heading_tip.winfo_exists():
-            self._heading_tip.destroy()
-            self._heading_tip = None
-
-    def _hide_heading_tooltip(self, event):
-        if hasattr(self, "_heading_tip") and self._heading_tip and self._heading_tip.winfo_exists():
-            self._heading_tip.destroy()
-            self._heading_tip = None
-
-    def _show_filter_popup(self, col_name, x, y):
-        if self._filter_popup and self._filter_popup.winfo_exists():
-            self._filter_popup.destroy()
-
-        popup = tk.Toplevel(self)
-        popup.wm_overrideredirect(True)
-        popup.configure(bg=C["surface0"], highlightbackground=C["overlay0"], highlightthickness=1)
-        popup.geometry(f"+{x}+{y}")
-        popup.lift()
-        self._filter_popup = popup
-
-        title = tk.Label(
-            popup, text=f"Filter: {col_name.upper()}", bg=C["surface0"],
-            fg=C["subtext0"], font=(FONT, 9, "bold"), anchor="w",
-        )
-        title.pack(fill="x", padx=8, pady=(6, 2))
-
-        col_indices = {"vmid": 0, "name": 1, "ip": 2, "node": 3, "pool": 4, "snaps": 5, "status": 6, "notes": 7}
-        current_val = self._active_filters.get(col_name, "")
-
-        if col_name == "name":
-            var = tk.StringVar(value=current_val)
-            entry = tk.Entry(
-                popup, textvariable=var, bg=C["surface1"], fg=C["text"],
-                insertbackground=C["text"], relief="flat", font=(FONT, 10),
-            )
-            entry.pack(fill="x", padx=8, pady=4, ipady=3)
-            entry.focus_set()
-            entry.select_range(0, "end")
-
-            def apply_name_filter(event=None):
-                val = var.get().strip()
-                if val:
-                    self._active_filters["name"] = val
-                else:
-                    self._active_filters.pop("name", None)
-                self._close_filter_popup()
-                self._apply_filters()
-                self._update_heading_labels()
-
-            entry.bind("<Return>", apply_name_filter)
-        else:
-            values = []
-            if hasattr(self, "_all_vm_rows") and self._all_vm_rows:
-                if col_name == "notes":
-                    values = self.config_data.get("note_options", [])
-                else:
-                    values = sorted(set(
-                        str(row[col_indices[col_name]])
-                        for row, _ in self._all_vm_rows
-                        if str(row[col_indices[col_name]])
-                    ))
-
-            combo_var = tk.StringVar(value=current_val)
-            combo = ttk.Combobox(
-                popup, textvariable=combo_var, values=[""] + values,
-                state="readonly", font=(FONT, 10), width=20,
-            )
-            combo.pack(fill="x", padx=8, pady=4)
-            combo.focus_set()
-
-            def apply_dropdown_filter(event=None):
-                val = combo_var.get().strip()
-                if val:
-                    self._active_filters[col_name] = val
-                else:
-                    self._active_filters.pop(col_name, None)
-                self._close_filter_popup()
-                self._apply_filters()
-                self._update_heading_labels()
-
-            combo.bind("<<ComboboxSelected>>", apply_dropdown_filter)
-
-        btn_frame = tk.Frame(popup, bg=C["surface0"])
-        btn_frame.pack(fill="x", padx=8, pady=(2, 6))
-
-        if col_name in self._active_filters:
-            HoverButton(
-                btn_frame, text="Clear",
-                command=lambda: self._clear_single_filter(col_name, popup),
-                bg=C["red"], fg=C["crust"], relief="flat", padx=6, pady=2,
-                hover_bg=C["red"], hover_fg=C["crust"], font=(FONT, 9),
-            ).pack(side="left")
-
-        if self._active_filters:
-            HoverButton(
-                btn_frame, text="Clear All",
-                command=lambda: self._clear_filters(popup),
-                bg=C["surface1"], fg=C["subtext0"], relief="flat", padx=6, pady=2,
-                hover_bg=C["surface2"], hover_fg=C["text"], font=(FONT, 9),
-            ).pack(side="right")
-
-        popup.bind("<Escape>", lambda e: self._close_filter_popup())
-        self._filter_deactivate_id = self.bind(
-            "<Deactivate>", lambda e: self._close_filter_popup()
-        )
-
-    def _close_filter_popup(self):
-        if hasattr(self, "_filter_deactivate_id") and self._filter_deactivate_id:
-            self.unbind("<Deactivate>", self._filter_deactivate_id)
-            self._filter_deactivate_id = None
-        if self._filter_popup and self._filter_popup.winfo_exists():
-            self._filter_popup.destroy()
-        self._filter_popup = None
-
-    def _clear_single_filter(self, col_name, popup=None):
-        self._active_filters.pop(col_name, None)
-        if popup and popup.winfo_exists():
-            popup.destroy()
-        self._filter_popup = None
-        self._apply_filters()
-        self._update_heading_labels()
-
-    def _apply_filters(self):
-        if not hasattr(self, "_all_vm_rows"):
-            return
-        col_indices = {"vmid": 0, "name": 1, "ip": 2, "node": 3, "pool": 4, "snaps": 5, "status": 6, "notes": 7}
-        filters = {k: v.lower() for k, v in self._active_filters.items() if v}
-
-        self.vm_tree.delete(*self.vm_tree.get_children())
-        visible = 0
-        for row, tag in self._all_vm_rows:
-            match = True
-            for cid, f_text in filters.items():
-                cell = str(row[col_indices.get(cid, -1)]).lower()
-                if cid == "name":
-                    if f_text not in cell:
-                        match = False
-                        break
-                else:
-                    if cell != f_text:
-                        match = False
-                        break
-            if not match:
-                continue
-            vmid = row[0]
-            check = "☑" if vmid in self._checked_items else "☐"
-            self.vm_tree.insert("", "end", values=(check,) + row, tags=(tag,))
-            visible += 1
-
-        self.vm_tree.tag_configure("running", foreground=C["green"])
-        self.vm_tree.tag_configure("stopped", foreground=C["overlay0"])
-        self._update_check_header()
-        self._update_selection_count()
-
-        if self._tree_sort_col:
-            self._reapply_sort()
-
-        if filters and visible != len(self._all_vm_rows):
-            self.status_label.config(
-                text=f"Showing {visible} of {len(self._all_vm_rows)} VMs",
-                fg=C["sapphire"],
-            )
-
-    def _clear_filters(self, popup=None):
-        self._active_filters.clear()
-        if popup and popup.winfo_exists():
-            popup.destroy()
-        self._filter_popup = None
-        self._apply_filters()
-        self._update_heading_labels()
-
-    def _update_heading_labels(self):
-        import tkinter.font as tkfont
-        heading_font = tkfont.Font(family=FONT, size=9, weight="bold")
-        sort_col = self._tree_sort_col
-        for c in self._data_columns:
-            label = c.upper()
-            if c in self._active_filters:
-                label += f" [{self._active_filters[c]}]"
-            if c == sort_col:
-                label += "  ▲" if self._tree_sort_asc else "  ▼"
-            self.vm_tree.heading(c, text=label)
-            needed = heading_font.measure(label) + 24
-            current = self.vm_tree.column(c, "width")
-            if needed > current:
-                self.vm_tree.column(c, width=needed)
-
-    def _refresh_filter_dropdowns(self):
-        pass
-
-    # ── Sorting ──────────────────────────────────────────────────────────────
-    def _reapply_sort(self):
-        col = self._tree_sort_col
-        if not col:
-            return
-        rows = [(self.vm_tree.set(iid, col), iid) for iid in self.vm_tree.get_children("")]
-        if col == "vmid":
-            rows.sort(key=lambda r: int(r[0]) if r[0].isdigit() else 0, reverse=not self._tree_sort_asc)
-        else:
-            rows.sort(key=lambda r: r[0].lower(), reverse=not self._tree_sort_asc)
-        for idx, (_, iid) in enumerate(rows):
-            self.vm_tree.move(iid, "", idx)
-        self._update_heading_labels()
-
-    def _sort_tree(self, col):
-        if col == "check":
-            return
-        if self._tree_sort_col == col:
-            self._tree_sort_asc = not self._tree_sort_asc
-        else:
-            self._tree_sort_col = col
-            self._tree_sort_asc = True
-        self._reapply_sort()
-
-    # ── Column reorder ───────────────────────────────────────────────────────
-    def _col_from_x(self, x):
-        if self.vm_tree.identify_region(x, 5) == "heading":
-            col_id = self.vm_tree.identify_column(x)
-            if col_id:
-                idx = int(col_id.replace("#", "")) - 1
-                if 0 <= idx < len(self._display_columns):
-                    if self._display_columns[idx] == "check":
-                        return None
-                    return idx
-        return None
-
-    def _on_heading_press(self, event):
-        region = self.vm_tree.identify_region(event.x, event.y)
-        if region == "heading":
-            self._drag_col, self._drag_start_x = self._col_from_x(event.x), event.x
-        else:
-            self._drag_col, self._drag_start_x = None, None
-            if region == "cell":
-                col_id = self.vm_tree.identify_column(event.x)
-                display_idx = int(col_id.replace("#", "")) - 1
-                if 0 <= display_idx < len(self._display_columns):
-                    col_name = self._display_columns[display_idx]
-                    if col_name == "check":
-                        iid = self.vm_tree.identify_row(event.y)
-                        if iid:
-                            self._toggle_check(iid)
-                    elif col_name == "notes":
-                        iid = self.vm_tree.identify_row(event.y)
-                        if iid:
-                            self._edit_notes_cell(iid, event)
-
-    def _on_heading_drag(self, event):
-        if self._drag_col is not None and self._drag_start_x is not None and abs(event.x - self._drag_start_x) > 20:
-            self.vm_tree.config(cursor="sb_h_double_arrow")
-
-    def _on_heading_release(self, event):
-        self.vm_tree.config(cursor="")
-        if self._drag_col is None or self._drag_start_x is None or abs(event.x - self._drag_start_x) < 20:
-            self._drag_col = self._drag_start_x = None
-            return
-        target_idx = self._col_from_x(event.x)
-        if target_idx is None or target_idx == self._drag_col:
-            self._drag_col = self._drag_start_x = None
-            return
-        cols = list(self._display_columns)
-        cols.insert(target_idx, cols.pop(self._drag_col))
-        self._display_columns = cols
-        self.vm_tree["displaycolumns"] = cols
-        self.config_data["column_order"] = [c for c in cols if c != "check"]
-        self._save_config()
-        self._drag_col = self._drag_start_x = None
-
-    # ── Checkbox Selection ───────────────────────────────────────────────────
-    def _toggle_check(self, iid):
-        values = list(self.vm_tree.item(iid, "values"))
-        vmid = values[1]
-        if vmid in self._checked_items:
-            self._checked_items.discard(vmid)
-            values[0] = "☐"
-        else:
-            self._checked_items.add(vmid)
-            values[0] = "☑"
-        self.vm_tree.item(iid, values=values)
-        self._update_check_header()
-        self._update_selection_count()
-
-    def _toggle_all_checks(self):
-        all_items = self.vm_tree.get_children("")
-        all_checked = all(
-            self.vm_tree.item(iid, "values")[0] == "☑"
-            for iid in all_items
-        ) if all_items else False
-
-        for iid in all_items:
-            values = list(self.vm_tree.item(iid, "values"))
-            vmid = values[1]
-            if all_checked:
-                self._checked_items.discard(vmid)
-                values[0] = "☐"
-            else:
-                self._checked_items.add(vmid)
-                values[0] = "☑"
-            self.vm_tree.item(iid, values=values)
-        self._update_check_header()
-        self._update_selection_count()
-
-    def _update_check_header(self):
-        all_items = self.vm_tree.get_children("")
-        if not all_items:
-            self.vm_tree.heading("check", text="☐")
-            return
-        all_checked = all(
-            self.vm_tree.item(iid, "values")[0] == "☑"
-            for iid in all_items
-        )
-        self.vm_tree.heading("check", text="☑" if all_checked else "☐")
-
-    def _update_selection_count(self):
-        count = len([
-            iid for iid in self.vm_tree.get_children("")
-            if self.vm_tree.item(iid, "values")[0] == "☑"
-        ])
-        if hasattr(self, "_check_count_label"):
-            if count > 0:
-                self._check_count_label.config(text=f"  {count} checked")
-            else:
-                self._check_count_label.config(text="")
-
-    # ── Notes Editing ────────────────────────────────────────────────────────
-    def _edit_notes_cell(self, iid, event):
-        if hasattr(self, "_notes_combo") and self._notes_combo:
-            self._notes_combo.destroy()
-            self._notes_combo = None
-
-        bbox = self.vm_tree.bbox(iid, column="notes")
-        if not bbox:
-            return
-
-        values = self.vm_tree.item(iid, "values")
-        vmid = values[1]
-        current = values[8] if len(values) > 8 else ""
-
-        options = self.config_data.get("note_options", [])
-        combo_values = [""] + options
-
-        combo = ttk.Combobox(
-            self.vm_tree, values=combo_values, state="normal",
-            font=(FONT, 10),
-        )
-        combo.set(current)
-        combo.place(x=bbox[0], y=bbox[1], width=bbox[2], height=bbox[3])
-        combo.focus_set()
-        combo.icursor("end")
-        self._notes_combo = combo
-
-        def commit(e=None):
-            val = combo.get().strip()
-            if val and val not in self.config_data.get("note_options", []):
-                self.config_data.setdefault("note_options", []).append(val)
-            vm_notes = self.config_data.setdefault("vm_notes", {})
-            key = self._vm_note_key(vmid)
-            vm_notes.pop(str(vmid), None)
-            if val:
-                vm_notes[key] = val
-            else:
-                vm_notes.pop(key, None)
-            self._save_config()
-
-            vals = list(self.vm_tree.item(iid, "values"))
-            vals[7] = val
-            self.vm_tree.item(iid, values=vals)
-
-            for i, (row, tag) in enumerate(self._all_vm_rows):
-                if row[0] == vmid:
-                    self._all_vm_rows[i] = (row[:-1] + (val,), tag)
-                    break
-
-            combo.destroy()
-            self._notes_combo = None
-
-        def cancel(e=None):
-            combo.destroy()
-            self._notes_combo = None
-
-        combo.bind("<Return>", commit)
-        combo.bind("<Escape>", cancel)
-        combo.bind("<FocusOut>", commit)
-        combo.bind("<<ComboboxSelected>>", commit)
 
     def _manage_note_options(self):
         dlg = tk.Toplevel(self)
@@ -2172,61 +2293,30 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             hover_bg=C["surface2"], font=(FONT, 10),
         ).pack(side="right")
 
-    # ── VM Selection ─────────────────────────────────────────────────────────
-    def _get_selected_vms(self):
-        vms = []
-        for iid in self.vm_tree.get_children(""):
-            values = self.vm_tree.item(iid, "values")
-            if values[0] != "☑":
-                continue
-            status = values[7].replace("● ", "").replace("○ ", "").strip()
-            vms.append({
-                "vmid": values[1], "name": values[2], "node": values[4],
-                "pool": values[5], "snaps": values[6], "status": status,
-            })
-        return vms
-
-    def _get_selected_vm(self):
-        sel = self.vm_tree.selection()
-        if not sel:
-            return None
-        if len(sel) > 1:
-            messagebox.showinfo("Single Selection", "Select a single VM.", parent=self)
-            return None
-        values = self.vm_tree.item(sel[0], "values")
-        status = values[7].replace("● ", "").replace("○ ", "").strip()
-        return {
-            "vmid": values[1], "name": values[2], "node": values[4],
-            "pool": values[5], "snaps": values[6], "status": status,
-        }
-
-    def _on_vm_double_click(self, event):
-        region = self.vm_tree.identify_region(event.x, event.y)
-        if region != "cell":
-            return
-        col_id = self.vm_tree.identify_column(event.x)
-        display_idx = int(col_id.replace("#", "")) - 1
-        if 0 <= display_idx < len(self._display_columns):
-            if self._display_columns[display_idx] in ("check", "notes"):
-                return
-        self._launch_spice()
-
     # ── SPICE Launch ─────────────────────────────────────────────────────────
     def _launch_spice(self):
-        vm = self._get_selected_vm()
-        if not vm:
+        vms = self._get_selected_vms()
+        if not vms:
+            messagebox.showinfo("No Selection", "Select a VM to launch.", parent=self)
             return
-        if vm["status"] != "running":
-            messagebox.showwarning("Not Running", f"{vm['name']} is not running.", parent=self)
+        running = [vm for vm in vms if vm["status"] == "running"]
+        if not running:
+            self.status_label.config(
+                text=f"{vms[0]['name']} is not running. Start it first (S)." if len(vms) == 1
+                else "None of the selected VMs are running.",
+                fg=C["red"],
+            )
             return
-
         cluster = self.current_cluster
-        DebugLogger.log(f"[SPICE] Launching VM {vm['vmid']} ({vm['name']}) "
-                        f"on {cluster.get('name', '?')}")
         auth = self._get_auth(cluster)
         if not auth:
             return
+        for vm in running:
+            self._launch_one(cluster, auth, vm)
 
+    def _launch_one(self, cluster, auth, vm):
+        DebugLogger.log(f"[SPICE] Launching VM {vm['vmid']} ({vm['name']}) "
+                        f"on {cluster.get('name', '?')}")
         self.status_label.config(text=f"Connecting to {vm['name']}...", fg=C["yellow"])
         self.update_idletasks()
 
@@ -2300,12 +2390,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
     def _vm_power_action(self, action, action_label):
         vms = self._get_selected_vms()
         if not vms:
-            vm = self._get_selected_vm()
-            if vm:
-                vms = [vm]
-            else:
-                messagebox.showinfo("No Selection", "Select one or more VMs.", parent=self)
-                return
+            messagebox.showinfo("No Selection", "Select one or more VMs.", parent=self)
+            return
 
         if action == "start":
             valid = [v for v in vms if v["status"] != "running"]
@@ -2322,8 +2408,6 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         if action == "shutdown" and not messagebox.askyesno("Shutdown", f"Shutdown?\n\n{names}", parent=self):
             return
         if action == "reboot" and not messagebox.askyesno("Reboot", f"Reboot?\n\n{names}", parent=self):
-            return
-        if action == "start" and len(valid) > 1 and not messagebox.askyesno("Start", f"Start {len(valid)} VMs?\n\n{names}", parent=self):
             return
 
         cluster = self.current_cluster
@@ -3097,24 +3181,11 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
                 self.config_data["prereqs_ok"] = True
                 save_config(self.config_data)
 
-    def _platform_header_buttons(self, header):
-        hbtn = {
-            "bg": C["crust"], "fg": C["subtext0"], "relief": "flat",
-            "font": ("sans-serif", 9), "padx": 10, "pady": 4,
-            "activebackground": C["mantle"], "activeforeground": C["text"],
-        }
-        HoverButton(
-            header, text="⚙  Install to App Menu",
-            command=self._install_to_app_menu,
-            hover_bg=C["mantle"], hover_fg=C["text"], **hbtn,
-        ).pack(side="right", padx=(0, 12))
-
-    def _platform_bottom_buttons(self, bottom):
-        HoverButton(
-            bottom, text=" Export .desktop ", command=self._export_desktop,
-            bg=C["surface0"], fg=C["subtext0"], relief="flat", padx=12, pady=8,
-            hover_bg=C["surface1"], hover_fg=C["text"], font=("sans-serif", 10),
-        ).pack(side="right", padx=(0, 8))
+    def _platform_menu_entries(self):
+        return [
+            ("Install to app menu…", self._install_to_app_menu),
+            ("Export .desktop for selected VM…", self._export_desktop),
+        ]
 
     def _export_desktop(self):
         vm = self._get_selected_vm()

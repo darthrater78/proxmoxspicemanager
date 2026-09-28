@@ -22,7 +22,7 @@ Click to install anything that is missing. A password prompt will appear.
 
 <img width="1508" height="616" alt="image" src="https://github.com/user-attachments/assets/05cced05-acf3-4c57-bf2d-823081a5249c" />
 
-After the recheck completes, the window will close and the app should pop up. To "install" the app, use the **Install To App Menu** option in the upper right. You can choose a bundled icon or use a custom one.
+After the recheck completes, the window will close and the app should pop up. To "install" the app, open **Settings** (bottom left) and choose **Install to app menu…**. You can choose a bundled icon or use a custom one.
 
 <img width="1039" height="704" alt="image" src="https://github.com/user-attachments/assets/ced942a2-0759-4b86-8576-88b9a471bd45" />
 

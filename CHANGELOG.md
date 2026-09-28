@@ -12,32 +12,41 @@ to the other where the platforms allow it.
 
 ### Changed
 
-- **Windows: redesigned main window.** VMs are grouped by node with a running
-  count per node, and each row has its own Connect button (Start when the VM is
-  stopped). A search box (matches name, ID, IP, node, pool, notes and OS) and
-  All / Running / Stopped filters replace the per-column filter popups. A panel
-  on the right shows the selected VM's details, its notes and every action;
-  Quick Rollback lives there as "Roll back to latest snapshot". Cluster editing,
-  import and export, the debug log, prerequisites, the Start Menu shortcut and
-  the project links move into a Settings menu in the sidebar. Double-click a
-  cluster to edit it.
-- Windows: the checkbox column is gone. Select several VMs with Ctrl-click or
-  Shift-click; actions apply to the whole selection.
-- Windows: starting a VM no longer asks for confirmation. Shut down, reboot and
-  force stop still do.
+- **Redesigned main window, on both platforms.** VMs are grouped by node with a
+  running count per node. A search box (name, ID, IP, node, pool, notes, OS)
+  and All / Running / Stopped filters replace the per-column filters, sorting
+  and column dragging. A panel on the right shows the selected VM's details,
+  its notes and every action; Quick Rollback lives there as "Roll back to
+  latest snapshot". Cluster editing, import and export, the debug log,
+  prerequisites, the project links and (Linux) the app-menu and `.desktop`
+  helpers move into a Settings menu in the sidebar. Double-click a cluster to
+  edit it.
+- Windows: each VM row has its own Connect button (Start when the VM is
+  stopped). The Linux table can't hold buttons; double-click a VM, press Enter
+  or use the panel's Open SPICE console.
+- The checkbox column is gone. Select several VMs with Ctrl-click or
+  Shift-click; actions apply to the whole selection, and Open console opens
+  every running VM in it.
+- Starting VMs no longer asks for confirmation. Shut down, reboot and force
+  stop still do.
 
 ### Added
 
-- Windows: keyboard shortcuts. Enter opens the console, S starts, Shift+S shuts
-  down, R reboots, P opens snapshots, Ctrl+. force stops, / jumps to search and
-  F5 refreshes. Each button shows its key.
-- Windows: accent colours. Orange is the default; Blue, Teal, Green, Purple, Red
-  and Yellow are presets that take each theme's own shade. Theme and accent are
+- Keyboard shortcuts: Enter opens the console, S starts, Shift+S shuts down,
+  R reboots, P opens snapshots, Ctrl+. force stops, / jumps to search and F5
+  refreshes. Each button shows its key.
+- Accent colours. Orange is the default; Blue, Teal, Green, Purple, Red and
+  Yellow are presets that take each theme's own shade. Theme and accent are
   picked from the Appearance button next to Settings. Text on the accent colour
   switches between dark and light for contrast. Saved as `accent` in the config.
-- Windows: an OS badge and name per VM, read from the VM's `ostype`.
+- An OS badge and name per VM, read from the VM's `ostype`.
 - `tools/screenshots/`: renders the Windows app on Linux (Wine and Xvfb) with
   mock data, in every theme, for documentation and design review.
+
+### Fixed
+
+- Linux: editing a cluster kept using its old settings (host, token, TLS
+  option) until the app was restarted.
 
 ## [3.0.0] - 2026-09-27
 

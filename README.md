@@ -17,16 +17,17 @@ Both platforms share one version number, and each release carries both the Windo
 - **Multi-cluster management** — connect to multiple Proxmox clusters with saved credentials
 - **Auto-discovery** — automatically detects SPICE-enabled VMs across all cluster nodes
 - **Live IP address** — shows each running VM's IP via QEMU guest agent (requires `VM.GuestAgent.Audit` permission)
-- **One-click SPICE launch** — opens `remote-viewer` sessions with a double-click
-- **VM power controls** — Start, ACPI Shutdown, and Force Stop with multi-select support
+- **One-click SPICE launch** — opens `remote-viewer` sessions from a VM's Connect button (Windows), a double-click, or Enter
+- **VMs grouped by node** — each node shows how many of its VMs are running; search by name, ID, IP, pool, notes or OS, and filter to running or stopped VMs
+- **VM power controls** — Start, ACPI Shutdown, Reboot and Force Stop; Ctrl-click or Shift-click to act on several VMs at once
+- **Keyboard shortcuts** — Enter opens the console, S starts, Shift+S shuts down, R reboots, P opens snapshots, Ctrl+. force stops, / searches, F5 refreshes
 - **Snapshot management** — create, rollback, and delete snapshots with a full dialog, plus quick-rollback to the latest snapshot
 - **Secure credential storage** — Linux: OS keyring (GNOME Keyring, KDE Wallet, etc.); Windows: DPAPI encryption tied to your Windows user account
-- **5 built-in themes** — Catppuccin Mocha, Catppuccin Latte, Nord, Dracula, OLED Dark
-- **Column filtering & sorting** — inline filters above the VM table, click headings to sort, drag headings to reorder
+- **5 built-in themes and 7 accent colours** — Catppuccin Mocha, Catppuccin Latte, Nord, Dracula, OLED Dark; orange accent by default, switchable from the Appearance button next to Settings
 - **Import / Export** — share cluster configurations between machines (with plaintext secret warning on export)
 - **App menu integration** — install as a desktop app (Linux: `.desktop` file; Windows: Start Menu shortcut)
 - **Prerequisite checker** — first-run dialog detects missing dependencies and helps you install them
-- **Debug logging** — optional timestamped log file for diagnosing API connectivity issues (toggle in header bar; Linux: `~/.config/proxmox-spice/debug.log`, Windows: `%APPDATA%\proxmox-spice\debug.log`)
+- **Debug logging** — optional timestamped log file for diagnosing API connectivity issues (toggle in the Settings menu; Linux: `~/.config/proxmox-spice/debug.log`, Windows: `%APPDATA%\proxmox-spice\debug.log`)
 
 ## Requirements
 
@@ -86,11 +87,11 @@ gh attestation verify proxmox-spice-manager.py -R darthrater78/proxmoxspicemanag
 | Linux | `~/.config/proxmox-spice/connections.json` |
 | Windows | `%APPDATA%\proxmox-spice\connections.json` |
 
-The config file stores cluster definitions, theme preference, column order, and (on Windows) DPAPI-encrypted token secrets. On Linux, secrets are stored separately in the OS keyring.
+The config file stores cluster definitions, theme and accent, VM notes, and (on Windows) DPAPI-encrypted token secrets. On Linux, secrets are stored separately in the OS keyring.
 
 ### Import / Export
 
-Use the sidebar Import/Export buttons to transfer cluster configurations between machines:
+Use Import clusters and Export clusters in the Settings menu to transfer cluster configurations between machines:
 
 - **Export** decrypts secrets and writes them as plaintext JSON — treat the exported file as sensitive
 - **Import** handles name collisions by appending "(Imported)". On Linux it moves secrets into the keyring. On Windows, imported secrets are not yet re-encrypted and must be re-entered by editing the cluster (known issue).
@@ -113,7 +114,7 @@ Use the sidebar Import/Export buttons to transfer cluster configurations between
 
 | Problem | Solution |
 |---|---|
-| No VMs appear after connecting | Verify your API token has `VM.Audit` permission and that VMs use QXL display. Enable Debug Log in the header bar and check the log file for details (Linux: `~/.config/proxmox-spice/debug.log`, Windows: `%APPDATA%\proxmox-spice\debug.log`) |
+| No VMs appear after connecting | Verify your API token has `VM.Audit` permission and that VMs use QXL display. Turn on the debug log in the Settings menu and check the log file for details (Linux: `~/.config/proxmox-spice/debug.log`, Windows: `%APPDATA%\proxmox-spice\debug.log`) |
 | IP column shows "no agent" | The VM does not have `agent: 1` enabled in its Proxmox config — this is expected |
 | IP column shows "agent error" | The QEMU guest agent is enabled but not responding — check that `qemu-guest-agent` is installed and running inside the VM |
 | "Token secret not found" error | Re-edit the cluster and re-enter the token secret |
