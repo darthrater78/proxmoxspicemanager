@@ -70,4 +70,10 @@ public class ClusterConfig
 
     [JsonPropertyName("token_secret_enc")]
     public string? TokenSecretEnc { get; set; }
+
+    // Plaintext secret, only in export files (the format both apps read). Import moves it
+    // into TokenSecretEnc, so it is never saved to connections.json.
+    [JsonPropertyName("token_secret")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TokenSecret { get; set; }
 }

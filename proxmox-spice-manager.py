@@ -198,6 +198,10 @@ MONO = "monospace"
 
 
 
+# Every Windows DPAPI blob starts with this (base64): an encrypted secret this app can't read
+DPAPI_PREFIX = "AQAAANCMnd8BFdERjHoAwE/Cl+"
+
+
 # ─── Proxmox API Helpers ─────────────────────────────────────────────────────
 class TlsUntrusted(Exception):
     """The server's certificate isn't trusted: not signed by a CA this system
@@ -2710,18 +2714,31 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             return
 
         existing = [c["name"] for c in self.config_data.get("clusters", [])]
+        need_secret = []
         for cluster in new_clusters:
             secret = cluster.pop("token_secret", None)
-            cluster.pop("token_secret_enc", None)
+            enc = cluster.pop("token_secret_enc", None)
+            if not secret and enc and not enc.startswith(DPAPI_PREFIX):
+                secret = enc  # Windows exports before 3.0.0 put the plaintext secret here
             if cluster["name"] in existing:
                 cluster["name"] = f"{cluster['name']} (Imported)"
             self.config_data.setdefault("clusters", []).append(cluster)
             if secret:
                 self._platform_save_secret(cluster["name"], secret)
+            elif cluster.get("auth_method") == "token":
+                need_secret.append(cluster["name"])
 
         self._save_config()
         self._populate_clusters()
         messagebox.showinfo("Imported", f"Imported {len(new_clusters)} cluster(s).", parent=self)
+        if need_secret:
+            # An encrypted Windows secret (DPAPI) only opens for that Windows user
+            messagebox.showwarning(
+                "Import",
+                "The file has no usable token secret for:\n\n" + "\n".join(need_secret)
+                + "\n\nEdit each of them and enter the secret again.",
+                parent=self,
+            )
 
     # ── Auth ─────────────────────────────────────────────────────────────────
     def _get_auth(self, cluster):

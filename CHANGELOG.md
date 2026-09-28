@@ -70,9 +70,17 @@ to the other where the platforms allow it.
   token or password is sent. Clusters that had the option on are asked once.
   The cluster dialog shows the pinned fingerprint with a Forget button, and a
   pin is dropped when the host changes.
+- Windows: importing clusters saved each token secret in plain text in
+  `connections.json` (and the cluster then couldn't log in). Import now
+  encrypts it with DPAPI, as adding a cluster does.
 
 ### Fixed
 
+- Export files work across platforms. Both apps write the token secret as
+  `token_secret` and read that, plus the older Windows exports that put the
+  plaintext secret in `token_secret_enc`. A secret that is a DPAPI blob (from a
+  Windows config file) can't be read by another user or machine; import names
+  those clusters so the secret can be entered again.
 - Linux: editing a cluster kept using its old settings (host, token, TLS
   option) until the app was restarted.
 

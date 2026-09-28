@@ -1264,16 +1264,29 @@ public partial class MainWindow : Window
             }
 
             var existingNames = _config.Clusters.Select(c => c.Name).ToHashSet();
+            var needSecret = new List<string>();
             foreach (var cluster in imported.Clusters)
             {
                 if (existingNames.Contains(cluster.Name))
                     cluster.Name += " (Imported)";
+                // Encrypt the secret with DPAPI here; the plaintext never reaches connections.json
+                var secret = ConfigService.ImportedSecret(cluster);
+                cluster.TokenSecret = null;
+                cluster.TokenSecretEnc = null;
+                if (secret != null)
+                    ConfigService.SaveSecret(cluster, secret);
+                else if (cluster.AuthMethod == "token")
+                    needSecret.Add(cluster.Name);
                 _config.Clusters.Add(cluster);
             }
 
             SaveConfig();
             RefreshClusterList();
             StatusLabel.Text = $"Imported {imported.Clusters.Count} cluster(s)";
+            if (needSecret.Count > 0)
+                MessageBox.Show("The file has no usable token secret for:\n\n" + string.Join("\n", needSecret) +
+                    "\n\nEdit each of them and enter the secret again.", "Import",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex)
         {
@@ -1306,15 +1319,14 @@ public partial class MainWindow : Window
 
         try
         {
-            var export = new AppConfig { Clusters = [] };
+            // The format both apps read: the secret in plaintext as token_secret, no DPAPI blob
+            var export = new AppConfig { Version = AppVersion, Clusters = [] };
             foreach (var cluster in _config.Clusters)
             {
                 var copy = JsonSerializer.Deserialize<ClusterConfig>(
                     JsonSerializer.Serialize(cluster))!;
-                // Decrypt for export
-                var secret = ConfigService.GetSecret(cluster);
-                if (secret != null)
-                    copy.TokenSecretEnc = secret; // plaintext in export
+                copy.TokenSecretEnc = null;
+                copy.TokenSecret = ConfigService.GetSecret(cluster);
                 export.Clusters.Add(copy);
             }
 

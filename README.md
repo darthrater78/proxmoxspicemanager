@@ -94,8 +94,8 @@ The config file stores cluster definitions, theme and accent, VM notes, and (on 
 Use Import clusters and Export clusters in the Settings menu to transfer cluster configurations between machines:
 
 - **Export** decrypts secrets and writes them as plaintext JSON — treat the exported file as sensitive
-- **Import** handles name collisions by appending "(Imported)". On Linux it moves secrets into the keyring. On Windows, imported secrets are not yet re-encrypted and must be re-entered by editing the cluster (known issue).
-- Export files are not yet interchangeable between the Windows and Linux apps (known issue).
+- **Import** handles name collisions by appending "(Imported)" and moves each token secret into the keyring (Linux) or encrypts it with DPAPI (Windows); the plaintext is never saved in the config.
+- Export files are interchangeable: a file exported from either app imports into the other. Files exported by the Windows app before 3.0.0 import too. A Windows config file (not an export) holds DPAPI-encrypted secrets that only open for that Windows user; importing it elsewhere asks you to re-enter those secrets.
 
 ## Security Notes
 
