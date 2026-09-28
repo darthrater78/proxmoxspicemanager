@@ -40,8 +40,9 @@ to the other where the platforms allow it.
   picked from the Appearance button next to Settings. Text on the accent colour
   switches between dark and light for contrast. Saved as `accent` in the config.
 - An OS badge and name per VM, read from the VM's `ostype`.
-- `tools/screenshots/`: renders the Windows app on Linux (Wine and Xvfb) with
-  mock data, in every theme, for documentation and design review.
+- `tools/screenshots/`: renders both apps with mock data, in every theme, for
+  documentation and design review (Windows under Wine, Linux natively, both on
+  Xvfb).
 
 ### Fixed
 

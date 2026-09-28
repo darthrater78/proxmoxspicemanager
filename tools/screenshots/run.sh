@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Renders screenshots of the Windows app on Linux, under Wine and Xvfb. See README.md.
+# Renders screenshots of both apps: the Windows app under Wine and Xvfb, the
+# Linux app natively under Xvfb. See README.md.
 # Usage: tools/screenshots/run.sh [output dir]   (default: dist/screenshots)
 set -euo pipefail
 
@@ -8,7 +9,7 @@ repo=$(cd "$here/../.." && pwd)
 cache=${XDG_CACHE_HOME:-$HOME/.cache}/proxmox-spice-screenshots
 out=$(realpath -m "${1:-$repo/dist/screenshots}")
 
-for tool in wine xvfb-run dotnet python3 curl unzip sha256sum; do
+for tool in wine xvfb-run dotnet python3 curl unzip sha256sum realpath; do
     command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 1; }
 done
 for dir in liberation dejavu; do
@@ -38,7 +39,7 @@ ln -sfn /usr/share/fonts/truetype/dejavu "$cache/src/dejavu"
 
 # Stand-in fonts renamed to the Windows families WPF asks for
 [[ -x $cache/venv/bin/python ]] || python3 -m venv "$cache/venv"
-"$cache/venv/bin/python" -c 'import fontTools' 2>/dev/null || "$cache/venv/bin/pip" install -q fonttools
+"$cache/venv/bin/pip" install -q --disable-pip-version-check -r "$here/requirements.txt"
 {
     echo 'REGEDIT4'
     echo
@@ -69,7 +70,15 @@ timeout 600 xvfb-run -a -s "-screen 0 1920x1200x24" \
     wine "$cache/build/Shots.exe" "Z:$out" "Z:$here/windows/proposals" || status=$?
 wineserver -w
 if [[ $status -ne 0 ]]; then
-    echo "screenshot run failed ($status); see $out/shots.log" >&2
+    echo "Windows screenshot run failed ($status); see $out/shots.log" >&2
     exit "$status"
+fi
+
+# The Linux app, natively. Tk comes from the distro (python3-tk), not pip.
+if "$cache/venv/bin/python" -c 'import tkinter' 2>/dev/null; then
+    timeout 300 xvfb-run -a -s "-screen 0 1400x900x24" \
+        "$cache/venv/bin/python" "$here/linux/shots.py" "$repo/proxmox-spice-manager.py" "$out"
+else
+    echo "skipping Linux screenshots: install python3-tk (Debian) or python3-tkinter (Fedora)" >&2
 fi
 echo "screenshots in $out"

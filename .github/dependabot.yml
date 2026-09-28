@@ -30,3 +30,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # The screenshot tool's Python packages (tools/screenshots/requirements.txt).
+  - package-ecosystem: "pip"
+    directory: "/tools/screenshots"
+    schedule:
+      interval: "weekly"
