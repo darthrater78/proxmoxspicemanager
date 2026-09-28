@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     // Node headings folded away; kept across refreshes and regrouping
     private readonly HashSet<string> _collapsedNodes = new();
     private string? _loadedClusterName;
+    private List<string> _offlineNodes = [];  // named in the summary; their VMs aren't listed
 
     // Single source of truth for the version is <Version> in the csproj.
     private static readonly string AppVersion =
@@ -282,7 +283,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // Phase 1: Fetch pool memberships and node list in parallel
+            // Phase 1: every VM (cluster/resources) and each node's state, in parallel
             var phaseSw = DebugLogger.StartTimer("Phase 1: cluster/resources + nodes");
             var resourcesTask = ProxmoxApi.RequestAsync(
                 cluster.Host, "/api2/json/cluster/resources?type=vm", auth: auth);
@@ -291,23 +292,10 @@ public partial class MainWindow : Window
             await Task.WhenAll(resourcesTask, nodesTask);
             DebugLogger.StopTimer(phaseSw, "Phase 1: cluster/resources + nodes");
 
-            var poolMap = new Dictionary<int, string>();
-            var resourcesJson = await resourcesTask;
-            if (resourcesJson?.TryGetProperty("data", out var resData) == true)
-            {
-                foreach (var res in resData.EnumerateArray())
-                {
-                    if (res.TryGetProperty("vmid", out var rvmid) &&
-                        res.TryGetProperty("pool", out var rpool) &&
-                        rpool.GetString() is string poolName && poolName.Length > 0)
-                    {
-                        poolMap[rvmid.GetInt32()] = poolName;
-                    }
-                }
-            }
-
             var nodesJson = await nodesTask;
-            if (nodesJson == null || !nodesJson.Value.TryGetProperty("data", out var nodesData))
+            var resourcesJson = await resourcesTask;
+            if (nodesJson == null || !nodesJson.Value.TryGetProperty("data", out var nodesData) ||
+                resourcesJson == null || !resourcesJson.Value.TryGetProperty("data", out var resData))
             {
                 StatusLabel.Text = $"Failed to connect to {cluster.Name}";
                 _clusterStatus[cluster.Name] = (false, null);
@@ -315,37 +303,38 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // Phase 2: Fetch per-node VM lists in parallel
-            var nodeNames = nodesData.EnumerateArray()
-                .Select(n => n.GetProperty("node").GetString() ?? "")
-                .Where(n => n.Length > 0)
-                .ToList();
-
-            phaseSw = DebugLogger.StartTimer($"Phase 2: per-node VM lists ({nodeNames.Count} nodes)");
-            var nodeVmTasks = nodeNames.Select(nodeName =>
-                ProxmoxApi.RequestAsync(cluster.Host, $"/api2/json/nodes/{nodeName}/qemu", auth: auth)
-            ).ToList();
-            var nodeVmResults = await Task.WhenAll(nodeVmTasks);
-            DebugLogger.StopTimer(phaseSw, $"Phase 2: per-node VM lists ({nodeNames.Count} nodes)");
+            // A request for a VM on an offline node waits seconds for Proxmox to give up
+            // (595), so those VMs are skipped and the node is named in the summary
+            var onlineNodes = new HashSet<string>();
+            var offlineNodes = new List<string>();
+            foreach (var node in nodesData.EnumerateArray())
+            {
+                var name = node.TryGetProperty("node", out var nn) ? nn.GetString() ?? "" : "";
+                if (name.Length == 0) continue;
+                if (node.TryGetProperty("status", out var ns) && ns.GetString() == "online")
+                    onlineNodes.Add(name);
+                else
+                    offlineNodes.Add(name);
+            }
+            offlineNodes.Sort(StringComparer.Ordinal);
 
             var vmEntries = new List<(int vmid, string name, string status, string nodeName, string pool)>();
-            for (int i = 0; i < nodeNames.Count; i++)
+            foreach (var res in resData.EnumerateArray())
             {
-                var vmJson = nodeVmResults[i];
-                if (vmJson == null || !vmJson.Value.TryGetProperty("data", out var vmData))
+                if (!res.TryGetProperty("type", out var rtype) || rtype.GetString() != "qemu" ||
+                    !res.TryGetProperty("vmid", out var rvmid) ||
+                    !res.TryGetProperty("node", out var rnode) || rnode.GetString() is not string nodeName ||
+                    !onlineNodes.Contains(nodeName))
                     continue;
-
-                foreach (var vm in vmData.EnumerateArray())
-                {
-                    var vmid = vm.GetProperty("vmid").GetInt32();
-                    var name = vm.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                    var status = vm.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
-                    var pool = poolMap.GetValueOrDefault(vmid, "");
-                    vmEntries.Add((vmid, name, status, nodeNames[i], pool));
-                }
+                vmEntries.Add((rvmid.GetInt32(),
+                    res.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                    res.TryGetProperty("status", out var st) ? st.GetString() ?? "" : "",
+                    nodeName,
+                    res.TryGetProperty("pool", out var rpool) ? rpool.GetString() ?? "" : ""));
             }
 
-            DebugLogger.Log($"[Refresh] Found {vmEntries.Count} total VMs across {nodeNames.Count} nodes");
+            DebugLogger.Log($"[Refresh] Found {vmEntries.Count} VMs on {onlineNodes.Count} online nodes" +
+                            (offlineNodes.Count > 0 ? $"; offline: {string.Join(", ", offlineNodes)}" : ""));
 
             // Phase 3: Fetch config for all VMs in parallel to check for SPICE display
             phaseSw = DebugLogger.StartTimer($"Phase 3: VM configs ({vmEntries.Count} VMs)");
@@ -428,6 +417,7 @@ public partial class MainWindow : Window
             foreach (var vm in vms.OrderBy(v => v.VmId))
                 _vmItems.Add(vm);
             _loadedClusterName = cluster.Name;
+            _offlineNodes = offlineNodes;
 
             _clusterStatus[cluster.Name] = (true, vms.Count);
             RefreshClusterList();
@@ -561,6 +551,9 @@ public partial class MainWindow : Window
         if (_selectedClusterIdx >= 0 && _selectedClusterIdx < _config.Clusters.Count &&
             Uri.TryCreate(_config.Clusters[_selectedClusterIdx].Host, UriKind.Absolute, out var uri))
             parts.Add(uri.Host);
+        if (_offlineNodes.Count > 0)
+            parts.Add(_offlineNodes.Count == 1 ? $"1 node offline ({_offlineNodes[0]})"
+                : $"{_offlineNodes.Count} nodes offline ({string.Join(", ", _offlineNodes)})");
         return string.Join(" · ", parts);
     }
 

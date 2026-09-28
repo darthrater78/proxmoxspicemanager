@@ -31,6 +31,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -205,7 +206,7 @@ def _get_ssl_context(skip_tls_verify=False):
     return ctx
 
 
-def api_request(host, endpoint, method="GET", auth=None, data=None):
+def api_request(host, endpoint, method="GET", auth=None, data=None, timeout=15):
     if not host.startswith("https://"):
         return {"error": "Host must use https://"}
     url = f"{host}{endpoint}"
@@ -229,7 +230,7 @@ def api_request(host, endpoint, method="GET", auth=None, data=None):
         with urllib.request.urlopen(
             req, data=data,
             context=_get_ssl_context(auth.get("skip_tls_verify", False) if auth else False),
-            timeout=15,
+            timeout=timeout,
         ) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
@@ -1612,6 +1613,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
 
         # Main-window state that outlives a rebuild (theme changes rebuild the UI)
         self._vms = []                 # dicts from the last refresh
+        self._offline_nodes = []       # named in the summary; their VMs aren't listed
+        self._agent_errors = 0
         self._iid_to_vm = {}
         self._vm_filter = "all"
         self._group_by_node = self.config_data.get("group_by_node", True)
@@ -2707,6 +2710,12 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         host = urllib.parse.urlparse(cluster.get("host", "")).hostname
         if host:
             parts.append(host)
+        offline = self._offline_nodes
+        if offline:
+            parts.append(f"1 node offline ({offline[0]})" if len(offline) == 1
+                         else f"{len(offline)} nodes offline ({', '.join(offline)})")
+        if self._agent_errors:
+            parts.append(f"{self._agent_errors} agent error(s)")
         tls_off = cluster.get("skip_tls_verify", False)
         if tls_off:
             parts.append("⚠ TLS verification off")
@@ -2737,68 +2746,48 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self.status_label.config(text=f"Loading VMs from {cluster['name']}...", fg=C["yellow"])
         self.update_idletasks()
 
+        def get(endpoint, timeout=15):
+            return api_request(cluster["host"], endpoint, auth=auth, timeout=timeout)
+
         def fetch():
-            data = api_request(
-                cluster["host"],
-                "/api2/json/cluster/resources?type=vm", auth=auth,
-            )
-            if "error" in data:
-                self.after(0, lambda d=data: self._set_cluster_offline(
-                    cluster, f"Error: {d['error']}"))
-                return
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                resources, nodes = pool.map(get, ("/api2/json/cluster/resources?type=vm",
+                                                  "/api2/json/nodes"))
+                error = resources.get("error") or nodes.get("error")
+                if error:
+                    self.after(0, lambda: self._set_cluster_offline(cluster, f"Error: {error}"))
+                    return
+                # A request for a VM on an offline node waits seconds for Proxmox to
+                # give up (595), so those VMs are skipped and the node is named instead
+                online = {n.get("node") for n in nodes.get("data", []) if n.get("status") == "online"}
+                offline = sorted(n.get("node", "") for n in nodes.get("data", [])
+                                 if n.get("node") not in online)
+                qemu = [v for v in resources.get("data", [])
+                        if v.get("type") == "qemu" and v.get("node") in online]
+                DebugLogger.log(f"[Refresh] {len(qemu)} VMs on {len(online)} online nodes"
+                                + (f"; offline: {', '.join(offline)}" if offline else ""))
 
-            all_vms = data.get("data", [])
-            if not all_vms:
-                self.after(0, lambda: update_ui([], 0))
-                return
-
-            qemu_vms = [v for v in all_vms if v.get("type") == "qemu"]
-
-            spice_vms = []
-            for vm in qemu_vms:
-                config = api_request(
-                    cluster["host"],
-                    f"/api2/json/nodes/{vm.get('node')}"
-                    f"/qemu/{vm.get('vmid')}/config",
-                    auth=auth,
-                )
-                if "error" in config:
-                    continue
-                vm["_ostype"] = str(config.get("data", {}).get("ostype", ""))
-                vm["_has_agent"] = agent_has_agent(config.get("data", {}).get("agent"))
-                vm["_description"] = str(config.get("data", {}).get("description", ""))
-                vga = str(config.get("data", {}).get("vga", "")).lower()
-                if "qxl" in vga or "spice" in vga:
-                    snap_data = api_request(
-                        cluster["host"],
-                        f"/api2/json/nodes/{vm.get('node')}"
-                        f"/qemu/{vm.get('vmid')}/snapshot",
-                        auth=auth,
-                    )
-                    snaps = (
-                        snap_data.get("data", [])
-                        if "error" not in snap_data else []
-                    )
-                    vm["_snap_count"] = len(
-                        [s for s in snaps if s.get("name") != "current"]
-                    )
+                base = [f"/api2/json/nodes/{v.get('node')}/qemu/{v.get('vmid')}" for v in qemu]
+                configs = list(pool.map(get, [f"{b}/config" for b in base]))
+                spice = []
+                for vm, path, config in zip(qemu, base, configs):
+                    cfg = config.get("data", {}) if "error" not in config else None
+                    vga = str((cfg or {}).get("vga", "")).lower()
+                    if cfg is None or not ("qxl" in vga or "spice" in vga):
+                        continue
+                    vm["_path"] = path
+                    vm["_ostype"] = str(cfg.get("ostype", ""))
+                    vm["_has_agent"] = agent_has_agent(cfg.get("agent"))
+                    vm["_description"] = str(cfg.get("description", ""))
+                    spice.append(vm)
+                snaps = pool.map(get, [f"{vm['_path']}/snapshot" for vm in spice])
+                for vm, snap_data in zip(spice, snaps):
+                    vm["_snap_count"] = len([s for s in snap_data.get("data", [])
+                                             if s.get("name") != "current"]) if "error" not in snap_data else 0
                     vm["_ips"], vm["_ip_note"] = [], "" if vm["_has_agent"] else "no agent"
-                    if vm.get("status") == "running" and vm["_has_agent"]:
-                        agent_data = api_request(
-                            cluster["host"],
-                            f"/api2/json/nodes/{vm.get('node')}"
-                            f"/qemu/{vm.get('vmid')}/agent/network-get-interfaces",
-                            auth=auth,
-                        )
-                        if "error" in agent_data:
-                            vm["_ip_note"] = "agent error"
-                        else:
-                            vm["_ips"] = agent_ips(agent_data.get("data", {}).get("result"))
-                    spice_vms.append(vm)
+            self.after(0, lambda: update_ui(spice, len(qemu), offline))
 
-            self.after(0, lambda: update_ui(spice_vms, len(qemu_vms)))
-
-        def update_ui(spice_vms, qemu_count):
+        def update_ui(spice_vms, qemu_count, offline):
             if self.current_cluster is not cluster or self._closing:
                 return  # the user moved on to another cluster meanwhile
             keep = {vm["vmid"] for vm in self._get_selected_vms()}
@@ -2814,7 +2803,10 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 "pve_note": vm.get("_description", ""),
                 "ostype": vm.get("_ostype", ""),
                 "note": self._lookup_vm_note(vm.get("vmid", "")),
+                "_path": vm["_path"], "_has_agent": vm["_has_agent"],
             } for vm in spice_vms]
+            self._offline_nodes = offline
+            self._agent_errors = 0
             self._loaded_cluster = cluster["name"]
             self._cluster_status[cluster["name"]] = (True, len(self._vms))
             self._populate_clusters()
@@ -2822,8 +2814,37 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             DebugLogger.log(f"[Refresh] {len(spice_vms)} SPICE VMs found "
                             f"(of {qemu_count} QEMU VMs)")
             self._show_summary()
+            self._fetch_addresses(cluster, auth, self._vms)
 
         threading.Thread(target=fetch, daemon=True).start()
+
+    def _fetch_addresses(self, cluster, auth, vms):
+        """Guest-agent addresses, after the list is on screen; each row fills in as its answer arrives."""
+        wanted = [vm for vm in vms if vm["status"] == "running" and vm["_has_agent"]]
+        if not wanted:
+            return
+
+        def one(vm):
+            data = api_request(cluster["host"], f"{vm['_path']}/agent/network-get-interfaces",
+                               auth=auth, timeout=3)
+            self.after(0, lambda: show(vm, data))
+
+        def show(vm, data):
+            if self._vms is not vms or self._closing:
+                return  # a newer refresh replaced these rows
+            if "error" in data:
+                vm["ip_note"] = "agent error"
+                self._agent_errors += 1
+                self._show_summary()
+            else:
+                vm["ips"] = agent_ips(data.get("data", {}).get("result"))
+            self._render_vms()
+
+        def run():
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                list(pool.map(one, wanted))
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _manage_note_options(self):
         dlg = tk.Toplevel(self)
