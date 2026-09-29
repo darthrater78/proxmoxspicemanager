@@ -152,7 +152,15 @@ static class Program
         w.Width = 1800;
         Pump(600);
         Capture(w, Path.Combine(outDir, "windows-state-wide.png"));
+        // Smallest window, a VM with two adapters selected: title, chips and inspector still fit
+        w.Width = 1000;
+        w.Height = 600;
+        list.SelectedItems.Clear();
+        list.SelectedItem = list.Items.OfType<VmDisplayItem>().First(v => v.VmId == 101);
+        Pump(600);
+        Capture(w, Path.Combine(outDir, "windows-state-small.png"));
         w.Width = 1280;
+        w.Height = 760;
         Call(w, "ToggleIpv6");
         Pump(400);
         config.GroupByNode = true;

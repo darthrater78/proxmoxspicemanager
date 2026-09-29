@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ProxmoxSpiceManager"
+        xmlns:sys="clr-namespace:System;assembly=System.Runtime"
         Title="Proxmox SPICE Manager" Height="760" Width="1280"
         MinHeight="600" MinWidth="1000"
         Background="{DynamicResource ThemeCrust}"
@@ -14,6 +15,13 @@
         <local:NodeSummaryConverter x:Key="NodeSummary"/>
         <local:FitAddressesConverter x:Key="FitAddresses"/>
         <GridLength x:Key="AddressColumnWidth">118</GridLength>
+        <!-- Set by UpdateColumns: a narrow window drops notes, then snapshots, then the address -->
+        <GridLength x:Key="NotesColumnWidth">2*</GridLength>
+        <sys:Double x:Key="NotesMinWidth">60</sys:Double>
+        <GridLength x:Key="SnapsColumnWidth">62</GridLength>
+        <Visibility x:Key="AddressVisibility">Visible</Visibility>
+        <Visibility x:Key="NotesVisibility">Visible</Visibility>
+        <Visibility x:Key="SnapsVisibility">Visible</Visibility>
         <FontFamily x:Key="Mono">Cascadia Code, Consolas</FontFamily>
 
         <!-- Stroked 16px line icon -->
@@ -375,9 +383,9 @@
 
                 <DockPanel Grid.Column="0" Margin="24,20,16,12">
                     <!-- Header -->
-                    <DockPanel DockPanel.Dock="Top" Margin="0,0,8,16">
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Border Width="210" Height="32" CornerRadius="6" Background="{DynamicResource ThemeMantle}"
+                    <DockPanel x:Name="HeaderPanel" DockPanel.Dock="Top" Margin="0,0,8,16" SizeChanged="OnHeaderResized">
+                        <StackPanel x:Name="HeaderTools" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border x:Name="SearchBorder" Width="210" Height="32" CornerRadius="6" Background="{DynamicResource ThemeMantle}"
                                     BorderBrush="{DynamicResource ThemeSurface1}" BorderThickness="1" Margin="0,0,8,0">
                                 <DockPanel Margin="10,0,8,0">
                                     <Border x:Name="SearchKey" DockPanel.Dock="Right" Style="{StaticResource Key}"><TextBlock Text="/" Style="{StaticResource KeyText}"/></Border>
@@ -393,7 +401,7 @@
                             <Button Style="{StaticResource CmdButton}" Click="OnRefresh" ToolTip="Refresh (F5)">
                                 <StackPanel Orientation="Horizontal">
                                     <Path Style="{StaticResource Glyph}" Data="{StaticResource IconRefresh}"/>
-                                    <TextBlock Text="Refresh" Margin="8,0,8,0" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="RefreshLabel" Text="Refresh" Margin="8,0,8,0" VerticalAlignment="Center"/>
                                     <Border Style="{StaticResource Key}"><TextBlock Text="F5" Style="{StaticResource KeyText}"/></Border>
                                 </StackPanel>
                             </Button>
@@ -406,9 +414,9 @@
                         </StackPanel>
                     </DockPanel>
 
-                    <!-- Filter chips; grouping and sort on the right -->
-                    <DockPanel DockPanel.Dock="Top" Margin="0,0,8,4">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <!-- Filter chips; grouping and sort on the right, or on a second row when both don't fit -->
+                    <DockPanel x:Name="ChipRow" DockPanel.Dock="Top" Margin="0,0,8,4" SizeChanged="OnChipRowResized">
+                    <StackPanel x:Name="ViewOptions" DockPanel.Dock="Right" Orientation="Horizontal">
                         <ToggleButton x:Name="Ipv6Toggle" Style="{StaticResource ToggleChip}" Content="IPv6" Click="OnIpv6Toggle"
                                       Margin="0,0,6,0" ToolTip="Show IPv6 addresses too"/>
                         <ToggleButton x:Name="GroupToggle" Style="{StaticResource ToggleChip}" Content="Group by node" Click="OnGroupToggle"
@@ -420,7 +428,7 @@
                             </StackPanel>
                         </Button>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal">
+                    <StackPanel x:Name="Filters" Orientation="Horizontal">
                         <RadioButton x:Name="FilterAll" Style="{StaticResource Chip}" GroupName="VmFilter" IsChecked="True" Checked="OnFilterChanged" Content="All"/>
                         <RadioButton x:Name="FilterRunning" Style="{StaticResource Chip}" GroupName="VmFilter" Checked="OnFilterChanged" Content="Running"/>
                         <RadioButton x:Name="FilterStopped" Style="{StaticResource Chip}" GroupName="VmFilter" Checked="OnFilterChanged" Content="Stopped"/>
@@ -433,15 +441,15 @@
                             <ColumnDefinition Width="42"/>
                             <ColumnDefinition Width="3*" MinWidth="120"/>
                             <ColumnDefinition Width="{DynamicResource AddressColumnWidth}"/>
-                            <ColumnDefinition Width="2*" MinWidth="60"/>
-                            <ColumnDefinition Width="62"/>
+                            <ColumnDefinition Width="{DynamicResource NotesColumnWidth}" MinWidth="{DynamicResource NotesMinWidth}"/>
+                            <ColumnDefinition Width="{DynamicResource SnapsColumnWidth}"/>
                             <ColumnDefinition Width="86"/>
                             <ColumnDefinition Width="98"/>
                         </Grid.ColumnDefinitions>
                         <Button Grid.Column="1" Tag="name" Content="NAME" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
-                        <Button Grid.Column="2" Tag="ip" Content="ADDRESS" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
-                        <Button Grid.Column="3" Tag="notes" Content="NOTES" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
-                        <Button Grid.Column="4" Tag="snaps" Content="SNAPS" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
+                        <Button Grid.Column="2" Tag="ip" Content="ADDRESS" Visibility="{DynamicResource AddressVisibility}" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
+                        <Button Grid.Column="3" Tag="notes" Content="NOTES" Visibility="{DynamicResource NotesVisibility}" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
+                        <Button Grid.Column="4" Tag="snaps" Content="SNAPS" Visibility="{DynamicResource SnapsVisibility}" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
                         <Button Grid.Column="5" Tag="status" Content="STATUS" Style="{StaticResource ColumnHeading}" Click="OnHeadingClick"/>
                     </Grid>
 
@@ -526,10 +534,10 @@
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="42"/>
                                                 <ColumnDefinition Width="3*" MinWidth="120"/>
-                                                <!-- Same width on every row, set by UpdateAddressColumn -->
+                                                <!-- Same width on every row, set by UpdateColumns -->
                                                 <ColumnDefinition Width="{DynamicResource AddressColumnWidth}"/>
-                                                <ColumnDefinition Width="2*" MinWidth="60"/>
-                                                <ColumnDefinition Width="62"/>
+                                                <ColumnDefinition Width="{DynamicResource NotesColumnWidth}" MinWidth="{DynamicResource NotesMinWidth}"/>
+                                                <ColumnDefinition Width="{DynamicResource SnapsColumnWidth}"/>
                                                 <ColumnDefinition Width="86"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
@@ -542,7 +550,7 @@
                                                 <TextBlock x:Name="Name" Text="{Binding Name}" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}" TextTrimming="CharacterEllipsis"/>
                                                 <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="{DynamicResource ThemeSubtext0}" TextTrimming="CharacterEllipsis"/>
                                             </StackPanel>
-                                            <Border x:Name="AddressBox" Grid.Column="2" Margin="0,0,24,0">
+                                            <Border x:Name="AddressBox" Grid.Column="2" Margin="0,0,24,0" Visibility="{DynamicResource AddressVisibility}">
                                                 <TextBlock FontFamily="{StaticResource Mono}" FontSize="12"
                                                            Foreground="{DynamicResource ThemeSubtext1}" VerticalAlignment="Center">
                                                     <TextBlock.Text>
@@ -554,10 +562,10 @@
                                                     </TextBlock.Text>
                                                 </TextBlock>
                                             </Border>
-                                            <TextBlock Grid.Column="3" Text="{Binding NotesColumn}" Foreground="{DynamicResource ThemeSubtext1}"
+                                            <TextBlock Grid.Column="3" Text="{Binding NotesColumn}" Foreground="{DynamicResource ThemeSubtext1}" Visibility="{DynamicResource NotesVisibility}"
                                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
                                                        ToolTip="{Binding NotesColumn}"/>
-                                            <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" ToolTip="Snapshots">
+                                            <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" ToolTip="Snapshots" Visibility="{DynamicResource SnapsVisibility}">
                                                 <Path Style="{StaticResource Glyph}" Stroke="{DynamicResource ThemeOverlay1}" Data="{StaticResource IconCamera}"/>
                                                 <TextBlock Text="{Binding SnapCount}" Foreground="{DynamicResource ThemeSubtext0}" Margin="5,0,0,0"/>
                                             </StackPanel>
@@ -610,7 +618,19 @@
                         <TextBlock x:Name="InspectorEmpty" Text="Select a VM to see its details and actions." TextWrapping="Wrap"
                                    Foreground="{DynamicResource ThemeOverlay1}" VerticalAlignment="Center" TextAlignment="Center"/>
                         <DockPanel x:Name="InspectorPanel" Visibility="Collapsed">
-                            <StackPanel DockPanel.Dock="Top">
+                            <Button DockPanel.Dock="Bottom" VerticalAlignment="Bottom" Margin="0,8,0,0" Style="{StaticResource CmdButton}"
+                                    HorizontalContentAlignment="Stretch" Click="OnForceStopVm">
+                                <DockPanel>
+                                    <Border DockPanel.Dock="Right" Style="{StaticResource Key}" BorderBrush="{DynamicResource ThemeRed}" Opacity="0.8">
+                                        <TextBlock Text="Ctrl+." Style="{StaticResource KeyText}" Foreground="{DynamicResource ThemeRed}"/>
+                                    </Border>
+                                    <Path Style="{StaticResource Glyph}" Stroke="{DynamicResource ThemeRed}" Data="{StaticResource IconStop}"/>
+                                    <TextBlock Text="Force stop" Margin="8,0,0,0" Foreground="{DynamicResource ThemeRed}"/>
+                                </DockPanel>
+                            </Button>
+                            <!-- Everything above Force stop scrolls when the window is too short for it -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
+                            <StackPanel>
                                 <TextBlock x:Name="InspectorCaption" Text="Selected" Style="{StaticResource SectionLabel}"/>
                                 <TextBlock x:Name="InspectorName" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource ThemeText}"
                                            Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
@@ -698,17 +718,9 @@
                                     </DockPanel>
                                 </Button>
                             </StackPanel>
+                            </ScrollViewer>
 
-                            <Button DockPanel.Dock="Bottom" VerticalAlignment="Bottom" Style="{StaticResource CmdButton}"
-                                    HorizontalContentAlignment="Stretch" Click="OnForceStopVm">
-                                <DockPanel>
-                                    <Border DockPanel.Dock="Right" Style="{StaticResource Key}" BorderBrush="{DynamicResource ThemeRed}" Opacity="0.8">
-                                        <TextBlock Text="Ctrl+." Style="{StaticResource KeyText}" Foreground="{DynamicResource ThemeRed}"/>
-                                    </Border>
-                                    <Path Style="{StaticResource Glyph}" Stroke="{DynamicResource ThemeRed}" Data="{StaticResource IconStop}"/>
-                                    <TextBlock Text="Force stop" Margin="8,0,0,0" Foreground="{DynamicResource ThemeRed}"/>
-                                </DockPanel>
-                            </Button>
+
                         </DockPanel>
                     </Grid>
                 </Border>

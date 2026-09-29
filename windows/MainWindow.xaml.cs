@@ -210,6 +210,7 @@ public partial class MainWindow : Window
         else
         {
             ClusterTitle.Text = "No cluster";
+            FitHeader();
             StatusLabel.Text = "Add a cluster to get started";
         }
     }
@@ -320,6 +321,7 @@ public partial class MainWindow : Window
 
         var cluster = _config.Clusters[_selectedClusterIdx];
         ClusterTitle.Text = cluster.Name;
+        FitHeader();
         if (_loadedClusterName != cluster.Name)
         {
             // Don't leave another cluster's VMs on screen under this cluster's name
@@ -519,7 +521,7 @@ public partial class MainWindow : Window
                             else
                             {
                                 capturedVm.Ips = ParseAgentIps(ipJson);
-                                UpdateAddressColumn();
+                                UpdateColumns();
                                 if (GetSelectedVms() is [var only] && only == capturedVm) ShowAddresses(only);
                             }
                         });
@@ -597,7 +599,7 @@ public partial class MainWindow : Window
     // Called once a cluster's VMs are in _vmItems
     private void OnVmsLoaded(HashSet<int>? keepSelected = null)
     {
-        UpdateAddressColumn();
+        UpdateColumns();
         UpdateListState();
         StatusLabel.Text = ClusterSummary();
         if (keepSelected is { Count: > 0 })
@@ -633,6 +635,7 @@ public partial class MainWindow : Window
         FilterAll.Content = $"All  {_vmItems.Count}";
         FilterRunning.Content = $"Running  {running}";
         FilterStopped.Content = $"Stopped  {_vmItems.Count - running}";
+        Dispatcher.BeginInvoke(FitChips, System.Windows.Threading.DispatcherPriority.Loaded);
         _vmView?.Refresh();
         var visible = _vmView?.OfType<VmDisplayItem>().Any() == true;
         var first = _vmView?.OfType<VmDisplayItem>().FirstOrDefault(IsShown);
@@ -680,6 +683,7 @@ public partial class MainWindow : Window
         VmDisplayItem.ShowNode = !grouped;
         foreach (var vm in _vmItems) vm.RefreshDetail();
         SortText.Text = $"Sort: {VmComparer.Labels[_config.VmSort]} {(_config.VmSortDesc ? "▼" : "▲")}";
+        Dispatcher.BeginInvoke(FitChips, System.Windows.Threading.DispatcherPriority.Loaded);
         // Every heading carries a sort mark so it reads as clickable: ↕ dim, ▲/▼ on the sorted one
         foreach (var heading in ColumnHeadings.Children.OfType<Button>())
         {
@@ -694,28 +698,96 @@ public partial class MainWindow : Window
         if (VmList.SelectedItem != null) VmList.ScrollIntoView(VmList.SelectedItem);
     }
 
-    // ── Address column ─────────────────────────────────────────────────────
-    // Row parts besides name, address and notes: OS badge, snapshots, status,
+    // ── Narrow windows ─────────────────────────────────────────────────────
+    private const double SearchWidth = 210, MinSearchWidth = 140;
+
+    private void OnHeaderResized(object sender, SizeChangedEventArgs e)
+    {
+        if (e.WidthChanged) FitHeader();
+    }
+
+    // The search box gives up width (down to 140), then Refresh its label, before
+    // the title does; a title that still doesn't fit is trimmed with an ellipsis.
+    private void FitHeader()
+    {
+        if (HeaderPanel.ActualWidth <= 0) return;
+        ClusterTitle.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var title = ClusterTitle.DesiredSize.Width;
+        RefreshLabel.Visibility = Visibility.Visible;
+        HeaderTools.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var other = HeaderTools.DesiredSize.Width - SearchBorder.Width;
+        var labelWidth = RefreshLabel.DesiredSize.Width + RefreshLabel.Margin.Left + RefreshLabel.Margin.Right;
+        var spare = HeaderPanel.ActualWidth - other - title - 16;
+        if (spare < MinSearchWidth)
+        {
+            RefreshLabel.Visibility = Visibility.Collapsed;
+            spare += labelWidth;
+        }
+        SearchBorder.Width = Math.Clamp(spare, MinSearchWidth, SearchWidth);
+    }
+
+    private void OnChipRowResized(object sender, SizeChangedEventArgs e)
+    {
+        if (e.WidthChanged) FitChips();
+    }
+
+    // Filters on the left, view options on the right; the options move to a
+    // second row when both don't fit
+    private void FitChips()
+    {
+        if (ChipRow.ActualWidth <= 0) return;
+        var infinite = new Size(double.PositiveInfinity, double.PositiveInfinity);
+        Filters.Measure(infinite);
+        ViewOptions.Measure(infinite);
+        var wrap = Filters.DesiredSize.Width + ViewOptions.DesiredSize.Width + 12 > ChipRow.ActualWidth;
+        DockPanel.SetDock(ViewOptions, wrap ? Dock.Bottom : Dock.Right);
+        ViewOptions.HorizontalAlignment = wrap ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+        ViewOptions.Margin = new Thickness(0, wrap ? 6 : 0, 0, 0);
+    }
+
+    // ── Columns ────────────────────────────────────────────────────────────
+    // Row parts besides name, address, notes and snapshots: OS badge, status,
     // button, the row's padding and room for the scrollbar
-    private const double FixedRowWidth = 42 + 62 + 86 + 98 + 20 + 8 + 18;
-    private const double MinAddressWidth = 118, MinNameAndNotes = 120 + 60;
+    private const double FixedRowWidth = 42 + 86 + 98 + 20 + 8 + 18;
+    private const double SnapsWidth = 62, MinAddressWidth = 118, MinNameWidth = 120, MinNotesWidth = 60;
 
     private void OnVmListResized(object sender, SizeChangedEventArgs e)
     {
-        if (e.WidthChanged) UpdateAddressColumn();
+        if (e.WidthChanged) UpdateColumns();
     }
 
-    // A wider window shows more of each VM's addresses, up to all of them.
-    // Every row shares the width, so the columns line up.
-    private void UpdateAddressColumn()
+    // Too narrow for every column: notes go first, then snapshots, then the
+    // address, as on Linux. A wider window shows more of each VM's addresses,
+    // up to all of them. Every row shares the widths, so the columns line up.
+    private void UpdateColumns()
     {
+        bool notes = true, snaps = true, address = true;
+        double Need() => FixedRowWidth + MinNameWidth + (snaps ? SnapsWidth : 0)
+            + (address ? MinAddressWidth : 0) + (notes ? MinNotesWidth : 0);
+        var width = VmList.ActualWidth;
+        if (Need() > width) notes = false;
+        if (Need() > width) snaps = false;
+        if (Need() > width) address = false;
+
+        Resources["NotesColumnWidth"] = notes ? new GridLength(2, GridUnitType.Star) : new GridLength(0);
+        Resources["NotesMinWidth"] = notes ? MinNotesWidth : 0.0;
+        Resources["NotesVisibility"] = notes ? Visibility.Visible : Visibility.Collapsed;
+        Resources["SnapsColumnWidth"] = new GridLength(snaps ? SnapsWidth : 0);
+        Resources["SnapsVisibility"] = snaps ? Visibility.Visible : Visibility.Collapsed;
+        Resources["AddressVisibility"] = address ? Visibility.Visible : Visibility.Collapsed;
+        if (!address)
+        {
+            Resources["AddressColumnWidth"] = new GridLength(0);
+            return;
+        }
+
         var typeface = new Typeface((FontFamily)FindResource("Mono"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
         var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         var needed = _vmItems.Select(vm => new FormattedText(string.Join(", ", vm.AddressParts),
                 System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, 12,
                 Brushes.Black, pixelsPerDip).WidthIncludingTrailingWhitespace)
             .DefaultIfEmpty(0).Max() + 26;
-        var free = VmList.ActualWidth - FixedRowWidth - MinAddressWidth - MinNameAndNotes;
+        var free = width - Need();
         var extra = Math.Max(0, Math.Min(needed - MinAddressWidth, free * 0.5));
         Resources["AddressColumnWidth"] = new GridLength(MinAddressWidth + extra);
     }
@@ -1395,7 +1467,7 @@ public partial class MainWindow : Window
         VmDisplayItem.ShowIpv6 = _config.ShowIpv6;
         SaveConfig();
         foreach (var vm in _vmItems) vm.RefreshAddress();
-        UpdateAddressColumn();
+        UpdateColumns();
         UpdateListState();
         ApplySortAndGrouping();
         UpdateInspector();

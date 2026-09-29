@@ -42,6 +42,12 @@ to the other where the platforms allow it.
   every running VM in it.
 - Starting VMs no longer asks for confirmation. Shut down, reboot and force
   stop still do.
+- Linux: buttons use the same line icons as Windows (play, power, refresh,
+  camera, undo, stop, monitor, plus, gear, search) in place of text symbols.
+- Linux: requests to a cluster reuse an open HTTPS connection instead of a new
+  TLS handshake each time, as Windows does. Only reads reuse one; actions
+  (start, snapshot, …) always get a fresh connection, so one can never be sent
+  twice.
 
 ### Added
 
@@ -105,6 +111,16 @@ to the other where the platforms allow it.
   those clusters so the secret can be entered again.
 - Linux: editing a cluster kept using its old settings (host, token, TLS
   option) until the app was restarted.
+- At the smallest window size (1000×600), on both platforms: the search box
+  covered the cluster name, the IPv6, Group and Sort buttons overlapped the
+  filters, and the details panel cut off its last actions (Windows lost Force
+  stop). Now the search box narrows first, then Refresh drops its label, and a
+  name that still doesn't fit ends in "…"; the view buttons move to a second
+  row; and the details panel scrolls with Force stop kept in view. Windows
+  also drops the Notes, Snapshots and Address columns as the window narrows,
+  as Linux does, instead of cutting off Status and Connect.
+- Linux: closing the window while VMs were loading printed "Exception in
+  thread … main thread is not in main loop".
 
 ## [3.0.0] - 2026-09-27
 

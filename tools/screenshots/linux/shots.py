@@ -61,7 +61,7 @@ class Shots(psm.ProxmoxSpiceManager):
         cluster = self.current_cluster
         if not cluster:
             return
-        self.cluster_title.config(text=cluster["name"])
+        self._set_title(cluster["name"])
         keep = {vm["vmid"] for vm in self._get_selected_vms()}
         self._vms = [
             {"vmid": vmid, "name": name, "node": node, "pool": pool, "snaps": snaps,
@@ -171,6 +171,10 @@ def run(app):
     app.geometry("1800x760")
     app.update()
     capture(app, "linux-state-wide.png")
+    # Smallest window, a VM with two adapters selected: title, chips and inspector still fit
+    app.geometry("1000x600")
+    tree.selection_set(["vm:101"])
+    capture(app, "linux-state-small.png")
     app.geometry("1280x760")
     app._toggle_ipv6()
     app.update()

@@ -11,6 +11,7 @@ Install on Debian:  sudo apt install python3-tk python3-keyring virt-viewer
 
 VERSION 3.0.0
 """
+from __future__ import annotations
 
 import copy
 import fcntl
@@ -37,6 +38,7 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Callable, Dict
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -45,6 +47,8 @@ from tkinter import font as tkfont
 APP_ID = "proxmox-spice-manager"
 APP_VERSION = "3.0.0"
 REPO_URL = "https://github.com/darthrater78/proxmoxspicemanager"
+
+Json = Dict[str, Any]  # a Proxmox API answer, a cluster or the config
 
 
 # ─── Debug Logger ────────────────────────────────────────────────────────────
@@ -172,7 +176,7 @@ ACCENTS = {
 }
 
 
-def on_accent(hex_color):
+def on_accent(hex_color: str) -> str:
     """Near-black or white, whichever contrasts more with the accent."""
     def lin(c):
         v = c / 255
@@ -183,7 +187,7 @@ def on_accent(hex_color):
     return "#1a1a1a" if (lum + 0.05) / (dark_lum + 0.05) >= 1.05 / (lum + 0.05) else "#ffffff"
 
 
-def apply_theme(theme, accent):
+def apply_theme(theme: str, accent: str) -> None:
     """Load a theme and accent into C, the palette every widget reads."""
     C.update(THEMES.get(theme, THEMES[DEFAULT_THEME]))
     C["accent"] = C[ACCENTS.get(accent, ACCENTS[DEFAULT_ACCENT])]
@@ -221,12 +225,12 @@ class TlsUntrusted(Exception):
         self.changed = changed  # a pin exists and this certificate doesn't match it
 
 
-def cert_fingerprint(der):
+def cert_fingerprint(der: bytes) -> str:
     """SHA-256 of a DER certificate, as Proxmox shows it: AB:CD:…"""
     return ":".join(f"{b:02X}" for b in hashlib.sha256(der).digest())
 
 
-def _fetch_fingerprint(hostname, port, timeout):
+def _fetch_fingerprint(hostname: str, port: int, timeout: float) -> str:
     """The certificate a server presents, read without trusting it (only to show the user)."""
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -236,7 +240,7 @@ def _fetch_fingerprint(hostname, port, timeout):
             return cert_fingerprint(tls.getpeercert(binary_form=True))
 
 
-def _connect(host, pin, timeout):
+def _connect(host: str, pin: str | None, timeout: float) -> http.client.HTTPSConnection:
     """An HTTPS connection whose certificate is already checked, before any request is
     sent: CA-verified as usual, or, when the cluster has a pinned fingerprint, exactly
     that certificate. Anything else raises TlsUntrusted."""
@@ -261,14 +265,79 @@ def _connect(host, pin, timeout):
     return conn
 
 
-def _send(host, pin, method, path, body, headers, timeout):
-    """(status, reason, parsed JSON or None) for one request over a checked connection."""
-    conn = _connect(host, pin, timeout)
-    try:
-        conn.request(method, path, body=body, headers=headers)
-        response = conn.getresponse()
-        raw = response.read()
-    finally:
+# Idle keep-alive connections per (host, port, pin), reused by GETs; each was checked
+# by _connect when it was opened. Older than _POOL_IDLE seconds, the server has likely
+# closed it.
+_POOL_IDLE = 20
+_POOL_SIZE = 8
+_pool = {}
+_pool_lock = threading.Lock()
+
+
+def _pool_key(host: str, pin: str | None) -> tuple[str | None, int, str | None]:
+    url = urllib.parse.urlparse(host)
+    return url.hostname, url.port or 443, pin
+
+
+def _pooled(key: tuple, timeout: float) -> http.client.HTTPSConnection | None:
+    """An idle connection for `key`, or None. Also closes every cluster's expired ones,
+    so a cluster no longer in use doesn't keep its sockets open."""
+    now = time.monotonic()
+    with _pool_lock:
+        for pool_key in list(_pool):
+            fresh = []
+            for conn, used in _pool[pool_key]:
+                if now - used < _POOL_IDLE and conn.sock is not None:
+                    fresh.append((conn, used))
+                else:
+                    conn.close()
+            _pool[pool_key] = fresh
+        idle = _pool.get(key, [])
+        if not idle:
+            return None
+        conn, _ = idle.pop()
+    conn.sock.settimeout(timeout)
+    return conn
+
+
+def _release(key: tuple, conn: http.client.HTTPSConnection) -> None:
+    with _pool_lock:
+        idle = _pool.setdefault(key, [])
+        if len(idle) < _POOL_SIZE:
+            idle.append((conn, time.monotonic()))
+            return
+    conn.close()
+
+
+def _send(host: str, pin: str | None, method: str, path: str, body: bytes | None,
+          headers: dict[str, str], timeout: float) -> tuple[int, str, Any]:
+    """(status, reason, parsed JSON or None) for one request over a checked connection.
+    GETs reuse an idle connection to the same cluster; anything else gets a fresh one,
+    so an action is never sent twice over a connection the server had already closed."""
+    key = _pool_key(host, pin)
+    reuse = method == "GET"
+    conn = _pooled(key, timeout) if reuse else None
+    while True:
+        reused = conn is not None
+        if conn is None:
+            conn = _connect(host, pin, timeout)
+        try:
+            conn.request(method, path, body=body, headers=headers)
+            response = conn.getresponse()
+            raw = response.read()
+        except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError):
+            conn.close()
+            if not reused:
+                raise
+            conn = None  # the server closed the idle connection: once more on a new one
+            continue
+        except BaseException:
+            conn.close()
+            raise
+        break
+    if reuse and not response.will_close:
+        _release(key, conn)
+    else:
         conn.close()
     try:
         parsed = json.loads(raw.decode("utf-8"))
@@ -277,7 +346,8 @@ def _send(host, pin, method, path, body, headers, timeout):
     return response.status, response.reason, parsed
 
 
-def api_request(host, endpoint, method="GET", auth=None, data=None, timeout=15):
+def api_request(host: str, endpoint: str, method: str = "GET", auth: Json | None = None,
+                data: bytes | None = None, timeout: float = 15) -> Json:
     if not host.startswith("https://"):
         return {"error": "Host must use https://"}
     base = urllib.parse.urlparse(host).path.rstrip("/")
@@ -310,7 +380,8 @@ def api_request(host, endpoint, method="GET", auth=None, data=None, timeout=15):
     return body if isinstance(body, dict) else {"error": "Invalid response"}
 
 
-def authenticate_password(host, username, password, pin=None):
+def authenticate_password(host: str, username: str, password: str,
+                          pin: str | None = None) -> dict[str, str] | None:
     """A ticket for username/password, or None. Raises TlsUntrusted before the password
     leaves this machine when the server's certificate isn't trusted."""
     # Never send a password over plain HTTP (an imported or hand-edited config
@@ -331,7 +402,7 @@ def authenticate_password(host, username, password, pin=None):
     return None
 
 
-def wait_for_task(host, auth, upid, timeout=180):
+def wait_for_task(host: str, auth: Json, upid: Any, timeout: float = 180) -> str | None:
     """Block until the Proxmox task a POST started (its UPID) ends: None once it ended well,
     else why not. Start, shutdown, snapshots etc. run as tasks, so the POST returns first."""
     if not isinstance(upid, str) or not upid.startswith("UPID:"):
@@ -350,7 +421,7 @@ def wait_for_task(host, auth, upid, timeout=180):
     return "still running after 3 minutes"
 
 
-def write_vv_file(spice_data):
+def write_vv_file(spice_data: Json) -> str:
     """A remote-viewer connection file from Proxmox's spiceproxy answer; returns its path.
     Created private (0600); remote-viewer deletes it once read (delete-this-file)."""
     with tempfile.NamedTemporaryFile(
@@ -374,7 +445,7 @@ def write_vv_file(spice_data):
 
 
 # ─── Config Persistence ──────────────────────────────────────────────────────
-def load_config(config_file):
+def load_config(config_file: Path) -> Json:
     if config_file.exists():
         try:
             with open(config_file, encoding="utf-8") as f:
@@ -817,8 +888,7 @@ class SnapshotDialog(tk.Toplevel):
 
         def run():
             error = wait_for_task(self.cluster["host"], self.auth, data.get("data"))
-            if not app._closing:
-                app.after(0, lambda: finish(error))
+            app._post(lambda: finish(error))
 
         def finish(error):
             if self.on_change:
@@ -1002,20 +1072,21 @@ class SnapshotDialog(tk.Toplevel):
 
 # ─── Base Application ────────────────────────────────────────────────────────
 # ─── Main-window widgets ──────────────────────────────────────────────────────
-def mix(c1, c2, t):
+def mix(c1: str, c2: str, t: float) -> str:
     """Blend two #rrggbb colours; t=0 gives c1, t=1 gives c2."""
     a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
     b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
     return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
 
 
-def round_rect(canvas, x1, y1, x2, y2, r, **kw):
+def round_rect(canvas: tk.Canvas, x1: float, y1: float, x2: float, y2: float, r: float,
+               **kw: Any) -> int:
     points = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
               x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
     return canvas.create_polygon(points, smooth=True, **kw)
 
 
-def os_badge(ostype):
+def os_badge(ostype: str) -> str:
     if ostype.startswith("w"):
         return "WIN"
     return {"l24": "LNX", "l26": "LNX", "solaris": "SOL"}.get(ostype, "VM")
@@ -1030,7 +1101,7 @@ OS_LABELS = {
 }
 
 
-def os_label(ostype):
+def os_label(ostype: str) -> str:
     return OS_LABELS.get(ostype, ostype or "Unknown OS")
 
 
@@ -1041,13 +1112,13 @@ SORT_LABELS = {
 }
 
 
-def agent_has_agent(value):
+def agent_has_agent(value: Any) -> bool:
     """True when a VM config's `agent` value ("1", "enabled=1,fstrim_cloned_disks=1") turns it on."""
     value = str(value or "")
     return value.startswith("1") or "enabled=1" in value.split(",")
 
 
-def agent_ips(interfaces):
+def agent_ips(interfaces: Any) -> list[tuple[str, str]]:
     """(adapter, address) pairs live on the guest's adapters, from network-get-interfaces.
 
     Loopback, link-local and unspecified addresses are left out. IPv4 comes first,
@@ -1066,23 +1137,23 @@ def agent_ips(interfaces):
     return sorted(found, key=lambda a: ":" in a[1])
 
 
-def vm_ips(vm, ipv6):
+def vm_ips(vm: Json, ipv6: bool) -> list[tuple[str, str]]:
     """The VM's addresses to show: IPv6 only when that setting is on."""
     return [(a, ip) for a, ip in vm.get("ips", []) if ipv6 or ":" not in ip]
 
 
-def note_lines(text):
+def note_lines(text: str) -> list[str]:
     """Proxmox notes as plain lines: no markdown heading or list markers, no blank lines."""
     lines = (line.strip().lstrip("#*->").strip() for line in (text or "").splitlines())
     return [line for line in lines if line]
 
 
-def notes_cell(vm):
+def notes_cell(vm: Json) -> str:
     """The list's Notes column: the first line of the Proxmox notes, else this app's note."""
     return next(iter(note_lines(vm.get("pve_note", ""))), "") or vm["note"]
 
 
-def fit_addresses(ips, width, measure):
+def fit_addresses(ips: list[str], width: int, measure: Callable[[str], int]) -> str:
     """As many addresses as fit in `width` pixels, then "+N" for the rest."""
     full = ", ".join(ips)
     if len(ips) <= 1 or measure(full) <= width:
@@ -1094,7 +1165,7 @@ def fit_addresses(ips, width, measure):
     return f"{ips[0]} +{len(ips) - 1}"
 
 
-def _ip_key(vm, ipv6):
+def _ip_key(vm: Json, ipv6: bool) -> tuple:
     """Numeric order by first address, IPv4 before IPv6; no address ("no agent") after them."""
     ips = vm_ips(vm, ipv6)
     if ips:
@@ -1103,7 +1174,7 @@ def _ip_key(vm, ipv6):
     return (1, 0, 0, vm.get("ip_note", ""))
 
 
-def vm_sort_key(vm, column, ipv6=False):
+def vm_sort_key(vm: Json, column: str, ipv6: bool = False) -> Any:
     """The sort key for one column; blanks sort after values."""
     if column == "vmid":
         return vm["vmid"]
@@ -1129,38 +1200,98 @@ class KeyCap(tk.Label):
         )
 
 
+# Line icons on a 16 px grid, the same shapes as the Windows app's Icon* geometries.
+# Each op is ("line", points), ("poly", points), ("oval", box) or
+# ("arc", box, start, extent), with angles counterclockwise from 3 o'clock.
+LINE_ICONS = {
+    "monitor": [("poly", (3, 4, 13, 4, 13, 10, 3, 10)), ("line", (6, 13, 10, 13)),
+                ("line", (8, 10, 8, 13))],
+    "play": [("poly", (5, 3, 12.5, 8, 5, 13))],
+    "power": [("line", (8, 2, 8, 7.5)), ("arc", (3, 3.07, 13, 13.07), 132.8, 274.4)],
+    "refresh": [("arc", (3, 3, 13, 13), 0, -315), ("line", (11.5, 1.8, 11.5, 4.6, 8.7, 4.6))],
+    "camera": [("poly", (2.5, 5, 5, 5, 6.5, 3, 9.5, 3, 11, 5, 13.5, 5, 13.5, 12.5, 2.5, 12.5)),
+               ("oval", (5.8, 6.8, 10.2, 11.2))],
+    "undo": [("line", (3, 6.5, 10, 6.5)), ("arc", (7, 6.5, 13, 12.5), 90, -180),
+             ("line", (10, 12.5, 6, 12.5)), ("line", (5.5, 4, 3, 6.5, 5.5, 9))],
+    "stop": [("poly", (4, 4, 12, 4, 12, 12, 4, 12))],
+    "plus": [("line", (8, 3, 8, 13)), ("line", (3, 8, 13, 8))],
+    "gear": [("oval", (5.8, 5.8, 10.2, 10.2)), ("line", (8, 1.8, 8, 3.4)),
+             ("line", (8, 12.6, 8, 14.2)), ("line", (1.8, 8, 3.4, 8)),
+             ("line", (12.6, 8, 14.2, 8)), ("line", (3.6, 3.6, 4.7, 4.7)),
+             ("line", (11.3, 11.3, 12.4, 12.4)), ("line", (3.6, 12.4, 4.7, 11.3)),
+             ("line", (11.3, 4.7, 12.4, 3.6))],
+    "search": [("oval", (2.5, 2.5, 11.5, 11.5)), ("line", (10.3, 10.3, 13.5, 13.5))],
+}
+
+
+class LineIcon(tk.Canvas):
+    """A 16 px stroked icon from LINE_ICONS."""
+
+    def __init__(self, master, name, bg, color):
+        super().__init__(master, width=16, height=16, bg=bg, highlightthickness=0, bd=0)
+        stroke = {"width": 1.4}
+        for op, coords, *angles in LINE_ICONS[name]:
+            if op == "line":
+                self.create_line(*coords, fill=color, capstyle="round", joinstyle="round",
+                                 tags="stroke", **stroke)
+            elif op == "poly":
+                self.create_polygon(*coords, fill="", outline=color, joinstyle="round",
+                                    tags="outline", **stroke)
+            elif op == "oval":
+                self.create_oval(*coords, outline=color, tags="outline", **stroke)
+            else:
+                start, extent = angles
+                self.create_arc(*coords, start=start, extent=extent, style="arc",
+                                outline=color, tags="outline", **stroke)
+
+    def set_color(self, color):
+        self.itemconfig("stroke", fill=color)
+        self.itemconfig("outline", outline=color)
+
+
 class ActionButton(tk.Frame):
     """Flat button made of labels: icon, text and key hint, with hover and a
     disabled state. tk.Button can't hold a right-aligned key hint."""
 
     def __init__(self, master, text, command, icon="", key="", bg=None, fg=None,
-                 hover_bg=None, border=None, bold=False, pady=6):
+                 hover_bg=None, border=None, bold=False, pady=6, padx=10, icon_fg=None):
         bg = bg or C["surface0"]
         super().__init__(master, bg=bg, highlightthickness=1,
                          highlightbackground=border or C["surface1"], cursor="hand2")
         self._bg = bg
         self._hover_bg = hover_bg or C["surface1"]
         self._fg = fg or C["text"]
+        # Icons are a step quieter than the text, as on Windows, unless the button is coloured
+        self._icon_fg = icon_fg or fg or C["subtext1"]
+        self._icon = None
         self._command = command
         self._enabled = True
         font = (FONT, 10, "bold") if bold else (FONT, 10)
         inner = tk.Frame(self, bg=bg)
-        inner.pack(fill="x", padx=10, pady=pady)
+        inner.pack(fill="x", padx=padx, pady=pady)
         self._parts = [self, inner]
         self._labels = []
         if key:
             cap = KeyCap(inner, key, bg, fg=None if fg is None else fg)
-            cap.pack(side="right", padx=(8, 0))
+            cap.pack(side="right", padx=(6, 0))
             self._parts.append(cap)
-        if icon:
+        if icon in LINE_ICONS:
+            self._icon = LineIcon(inner, icon, bg, self._icon_fg)
+            self._icon.pack(side="left", padx=(0, 6))
+            self._parts.append(self._icon)
+        elif icon:
             glyph = tk.Label(inner, text=icon, bg=bg, fg=self._fg, font=font, width=2, anchor="w")
             glyph.pack(side="left")
             self._parts.append(glyph)
             self._labels.append(glyph)
+        self._text = text
+        self._font = tkfont.Font(font=font)
         self.label = tk.Label(inner, text=text, bg=bg, fg=self._fg, font=font, anchor="w")
-        self.label.pack(side="left")
+        self.label.pack(side="left", fill="x", expand=True)
         self._parts.append(self.label)
         self._labels.append(self.label)
+        # Too narrow for the text: cut it with an ellipsis rather than mid-letter
+        self.label.bind("<Configure>", lambda e: self._fit_text())
         for part in self._parts:
             part.bind("<Button-1>", self._click)
             part.bind("<Enter>", lambda e: self._paint(self._hover_bg))
@@ -1182,10 +1313,19 @@ class ActionButton(tk.Frame):
         fg = self._fg if enabled else mix(self._fg, self._bg, 0.6)
         for label in self._labels:
             label.config(fg=fg)
+        if self._icon is not None:
+            self._icon.set_color(self._icon_fg if enabled else mix(self._icon_fg, self._bg, 0.6))
         self.config(cursor="hand2" if enabled else "arrow")
 
     def set_text(self, text):
-        self.label.config(text=text)
+        self._text = text
+        self._fit_text()
+
+    def _fit_text(self):
+        width = self.label.winfo_width()
+        text = self._text if width <= 1 else elide(self._text, width - 2, self._font)
+        if self.label.cget("text") != text:
+            self.label.config(text=text)
 
 
 class Chip(tk.Canvas):
@@ -1228,7 +1368,7 @@ class Chip(tk.Canvas):
             self.create_line(x, 12, x + 4, 16, x + 8, 12, fill=fg, width=1.4)
 
 
-def elide(text, width, font):
+def elide(text: str, width: int, font: tkfont.Font) -> str:
     """Text cut to `width` pixels with an ellipsis, like WPF's CharacterEllipsis."""
     if width <= 0:
         return ""
@@ -1810,6 +1950,16 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         raise NotImplementedError
 
     # ── UI Construction ──────────────────────────────────────────────────────
+    def _post(self, callback: Callable[[], Any]) -> None:
+        """Run `callback` on the Tk thread; for background threads. Dropped once the
+        window is closing: Tk raises if a thread schedules work on a destroyed window."""
+        if self._closing:
+            return
+        try:
+            self.after(0, callback)
+        except (RuntimeError, tk.TclError):
+            pass  # closed between the check and the call
+
     def _on_close(self):
         self._closing = True
         self._commit_note()
@@ -1929,12 +2079,12 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         bottom.pack(side="bottom", fill="x", padx=(12, 8), pady=(0, 10))
         tk.Frame(bottom, bg=C["surface1"], height=1).pack(fill="x", padx=8, pady=(0, 6))
         nav = {"bg": C["crust"], "border": C["crust"], "hover_bg": C["surface0"], "pady": 5}
-        ActionButton(bottom, "Add cluster", self._add_cluster, icon="+", **nav).pack(fill="x")
+        ActionButton(bottom, "Add cluster", self._add_cluster, icon="plus", **nav).pack(fill="x")
         row = tk.Frame(bottom, bg=C["crust"])
         row.pack(fill="x")
         self._appearance_btn = self._build_appearance_button(row)
         self._appearance_btn.pack(side="right", padx=(4, 0))
-        self._settings_btn = ActionButton(row, "Settings", self._open_settings, icon="⚙", **nav)
+        self._settings_btn = ActionButton(row, "Settings", self._open_settings, icon="gear", **nav)
         self._settings_btn.pack(side="left", fill="x", expand=True)
 
         tk.Label(sidebar, text="Clusters", bg=C["crust"], fg=C["subtext0"],
@@ -1959,14 +2109,15 @@ class ProxmoxSpiceManagerBase(tk.Tk):
     def _build_list(self, main):
         header = tk.Frame(main, bg=C["base"])
         header.pack(fill="x", pady=(0, 2))
+        header.bind("<Configure>", lambda e: self._fit_header())
+        self._header = header
 
         tools = tk.Frame(header, bg=C["base"])
         tools.pack(side="right", anchor="n", pady=(4, 0))
         search = tk.Frame(tools, bg=C["mantle"], highlightthickness=1,
                           highlightbackground=C["surface1"])
         search.pack(side="left", padx=(0, 8))
-        tk.Label(search, text="⚲", bg=C["mantle"], fg=C["overlay1"],
-                 font=(FONT, 11)).pack(side="left", padx=(8, 0))
+        LineIcon(search, "search", C["mantle"], C["overlay1"]).pack(side="left", padx=(8, 0))
         self._search_key = KeyCap(search, "/", C["mantle"])
         self._search_key.pack(side="right", padx=(0, 8))
         self.search_entry = tk.Entry(
@@ -1981,41 +2132,103 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self.search_entry.bind("<FocusIn>", lambda e: self._update_search_hint())
         self.search_entry.bind("<FocusOut>", lambda e: self._update_search_hint())
         self._update_search_hint()
-        ActionButton(tools, "Refresh", self._refresh_vms, icon="⟳", key="F5",
-                     pady=4).pack(side="left")
+        self._refresh_btn = ActionButton(tools, "Refresh", self._refresh_vms, icon="refresh",
+                                         key="F5", pady=4)
+        self._refresh_btn.pack(side="left")
+        self._header_tools = tools
 
         titles = tk.Frame(header, bg=C["base"])
         titles.pack(side="left", fill="x", expand=True)
-        self.cluster_title = tk.Label(
-            titles, text=self.current_cluster["name"] if self.current_cluster else "No cluster",
-            bg=C["base"], fg=C["text"], font=(FONT, 20, "bold"), anchor="w",
-        )
+        self.cluster_title = tk.Label(titles, bg=C["base"], fg=C["text"],
+                                      font=(FONT, 20, "bold"), anchor="w")
         self.cluster_title.pack(fill="x")
+        self._set_title(self.current_cluster["name"] if self.current_cluster else "No cluster")
         self.status_label = tk.Label(
             main, text="" if self.config_data.get("clusters") else "Add a cluster to get started",
             bg=C["base"], fg=C["subtext0"], font=(FONT, 10), anchor="w",
         )
         self.status_label.pack(fill="x", pady=(0, 14), after=header)
 
+        # Filters on the left, view options on the right; the options move to a second
+        # row when both don't fit
         chips = tk.Frame(main, bg=C["base"])
         chips.pack(fill="x", pady=(0, 6))
+        chips.bind("<Configure>", lambda e: self._fit_chips())
+        self._chip_rows = (chips, tk.Frame(chips, bg=C["base"]), tk.Frame(chips, bg=C["base"]))
+        _, filters, options = self._chip_rows
+        self._chips_wrapped = None
         self._chips = {}
         for key in ("all", "running", "stopped"):
-            chip = Chip(chips, lambda k=key: self._set_vm_filter(k))
+            chip = Chip(filters, lambda k=key: self._set_vm_filter(k))
             chip.pack(side="left", padx=(0, 6))
             self._chips[key] = chip
-        self._sort_chip = Chip(chips, self._open_sort_menu, chevron=True)
-        self._sort_chip.pack(side="right")
-        self._group_chip = Chip(chips, self._toggle_grouping)
-        self._group_chip.pack(side="right", padx=(0, 6))
-        self._ipv6_chip = Chip(chips, self._toggle_ipv6)
-        self._ipv6_chip.pack(side="right", padx=(0, 6))
+        self._ipv6_chip = Chip(options, self._toggle_ipv6)
+        self._ipv6_chip.pack(side="left", padx=(0, 6))
+        self._group_chip = Chip(options, self._toggle_grouping)
+        self._group_chip.pack(side="left", padx=(0, 6))
+        self._sort_chip = Chip(options, self._open_sort_menu, chevron=True)
+        self._sort_chip.pack(side="left")
 
         table = tk.Frame(main, bg=C["base"])
         table.pack(fill="both", expand=True)
         self.vm_list = VmList(table, self)
         self.vm_list.pack(fill="both", expand=True)
         self._empty_label = tk.Label(table, bg=C["base"], fg=C["overlay1"], font=(FONT, 10))
+
+    def _set_title(self, text):
+        self._title_text = text
+        self._fit_header()
+
+    def _fit_header(self):
+        """The search box gives up width (down to 12 characters), then Refresh its label,
+        before the title does; a title that still doesn't fit is cut with an ellipsis."""
+        header = getattr(self, "_header", None)
+        if header is None or not header.winfo_exists():
+            return
+        title_font = tkfont.Font(font=self.cluster_title.cget("font"))
+        entry_font = tkfont.Font(font=self.search_entry.cget("font"))
+        width = header.winfo_width()
+        if width <= 1:  # not laid out yet; <Configure> calls again
+            self.cluster_title.config(text=self._title_text)
+            return
+        char = entry_font.measure("0")
+        label = self._refresh_btn.label
+        label_width = label.winfo_reqwidth() if label.winfo_manager() else 0
+        other = (self._header_tools.winfo_reqwidth() - label_width
+                 - int(self.search_entry.cget("width")) * char)
+        title = title_font.measure(self._title_text)
+        full_label = self._refresh_btn._font.measure("Refresh") + 4
+        show_label = width - other - full_label - 12 * char - title - 16 >= 0
+        if show_label != bool(label.winfo_manager()):
+            if show_label:
+                label.pack(side="left", fill="x", expand=True)
+            else:
+                label.pack_forget()
+        if show_label:
+            other += full_label
+        spare = width - other - title - 16
+        fit = max(12, min(20, spare // char))
+        if fit != int(self.search_entry.cget("width")):
+            self.search_entry.config(width=fit)
+        room = width - other - fit * char - 16
+        self.cluster_title.config(text=elide(self._title_text, room, title_font))
+
+    def _fit_chips(self):
+        row, filters, options = self._chip_rows
+        if not row.winfo_exists():
+            return
+        wrap = filters.winfo_reqwidth() + options.winfo_reqwidth() + 12 > row.winfo_width()
+        if wrap == self._chips_wrapped:
+            return
+        self._chips_wrapped = wrap
+        filters.pack_forget()
+        options.pack_forget()
+        if wrap:
+            filters.pack(side="top", anchor="w")
+            options.pack(side="top", anchor="w", pady=(6, 0))
+        else:
+            filters.pack(side="left")
+            options.pack(side="right")
 
     def _update_search_hint(self):
         if not hasattr(self, "_search_hint"):
@@ -2058,6 +2271,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                      hover_bg=C["surface2"] if on else C["surface1"])
         self._sort_chip.set(f"Sort: {SORT_LABELS[self._sort_col]} {'▼' if self._sort_desc else '▲'}",
                             bg=C["surface0"], fg=C["text"], border=C["surface1"])
+        self._chips_wrapped = None  # labels changed width: decide again
+        self.after_idle(self._fit_chips)
 
     def _vm_matches(self, vm, query):
         running = vm["status"] == "running"
@@ -2140,6 +2355,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                      font=(FONT, 9)).pack(anchor="w", pady=(6 if i else 0, 0))
             for ip in ips:
                 tk.Label(frame, text=ip, bg=bg, fg=C["text"], font=(MONO, 9)).pack(anchor="w")
+        self._bind_wheel(frame, self._insp_wheel)
 
     def _address_cell(self, vm, width):
         """Every address that fits in `width` pixels, "+N" for the rest, or why there is none."""
@@ -2225,8 +2441,39 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         )
         insp = tk.Frame(parent, bg=bg)
         self._insp = insp
-        body = tk.Frame(insp, bg=bg)
-        body.pack(fill="both", expand=True, padx=20, pady=(22, 18))
+        ActionButton(
+            insp, "Force stop", self._stop_vm, icon="stop", key="Ctrl+.", fg=C["red"], pady=5,
+        ).pack(side="bottom", fill="x", padx=20, pady=(8, 18))
+        # Everything above Force stop scrolls when the window is too short for it
+        scroll = tk.Frame(insp, bg=bg)
+        scroll.pack(fill="both", expand=True, pady=(22, 0))
+        canvas = tk.Canvas(scroll, bg=bg, highlightthickness=0, bd=0)
+        bar = ttk.Scrollbar(scroll, orient="vertical", command=canvas.yview)
+        canvas.pack(side="left", fill="both", expand=True)
+        body = tk.Frame(canvas, bg=bg)
+        window = canvas.create_window(20, 0, window=body, anchor="nw")
+
+        def fit(event=None):
+            scrolls = body.winfo_reqheight() > canvas.winfo_height()
+            if scrolls != bar.winfo_ismapped():
+                if scrolls:
+                    bar.pack(side="right", fill="y", before=canvas)
+                else:
+                    bar.pack_forget()
+                    canvas.yview_moveto(0)
+            # The scrollbar takes the place of the right-hand padding
+            canvas.itemconfig(window, width=max(canvas.winfo_width() - (22 if scrolls else 40), 1))
+            canvas.configure(scrollregion=(0, 0, 1, body.winfo_reqheight()))
+
+        def wheel(step):
+            if bar.winfo_ismapped():
+                canvas.yview_scroll(step * 3, "units")
+            return "break"
+
+        canvas.configure(yscrollcommand=bar.set, yscrollincrement=10)
+        canvas.bind("<Configure>", fit)
+        body.bind("<Configure>", fit)
+        self._insp_wheel = wheel
 
         self._insp_caption = tk.Label(body, text="Selected", bg=bg, fg=C["subtext0"],
                                       font=(FONT, 9), anchor="w")
@@ -2243,9 +2490,9 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._insp_state.pack(side="left")
 
         self._console_btn = ActionButton(
-            body, "Open SPICE console", self._launch_spice, key="Enter",
+            body, "Open SPICE console", self._launch_spice, icon="monitor", key="Enter",
             bg=C["accent"], fg=C["on_accent"], border=C["accent"],
-            hover_bg=mix(C["accent"], C["mantle"], 0.15), bold=True, pady=8,
+            hover_bg=mix(C["accent"], C["mantle"], 0.15), bold=True, pady=8, padx=8,
         )
         self._console_btn.pack(fill="x", pady=(16, 0))
 
@@ -2294,19 +2541,25 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                  anchor="w").pack(fill="x", pady=(20, 6))
         self._action_btns = {}
         for key, icon, text, hint, command in (
-            ("start", "▶", "Start", "S", self._start_vm),
-            ("shutdown", "↓", "Shut down", "Shift+S", self._shutdown_vm),
-            ("reboot", "↻", "Reboot", "R", self._reboot_vm),
-            ("snapshots", "◉", "Snapshots", "P", self._show_snapshots),
-            ("rollback", "↺", "Roll back to latest snapshot", "", self._quick_rollback),
+            ("start", "play", "Start", "S", self._start_vm),
+            ("shutdown", "power", "Shut down", "Shift+S", self._shutdown_vm),
+            ("reboot", "refresh", "Reboot", "R", self._reboot_vm),
+            ("snapshots", "camera", "Snapshots", "P", self._show_snapshots),
+            ("rollback", "undo", "Roll back to latest snapshot", "", self._quick_rollback),
         ):
             btn = ActionButton(body, text, command, icon=icon, key=hint, pady=5)
             btn.pack(fill="x", pady=(0, 5))
             self._action_btns[key] = btn
 
-        ActionButton(
-            body, "Force stop", self._stop_vm, icon="■", key="Ctrl+.", fg=C["red"], pady=5,
-        ).pack(side="bottom", fill="x")
+        self._bind_wheel(insp, wheel)
+
+    def _bind_wheel(self, widget, wheel):
+        """Wheel scrolling over a widget and everything inside it."""
+        for seq, step in (("<Button-4>", -1), ("<Button-5>", 1)):
+            widget.bind(seq, lambda e, s=step: wheel(s))
+        widget.bind("<MouseWheel>", lambda e: wheel(-1 if e.delta > 0 else 1))
+        for child in widget.winfo_children():
+            self._bind_wheel(child, wheel)
 
     def _update_inspector(self):
         # Save an edit in progress to the VM it was typed for, before the panel moves on
@@ -2712,7 +2965,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             else:
                 self._cluster_idx = -1
                 self.current_cluster = None
-                self.cluster_title.config(text="No cluster")
+                self._set_title("No cluster")
                 self.status_label.config(text="Add a cluster to get started", fg=C["subtext0"])
                 self._populate_clusters()
                 self._render_vms()
@@ -2751,7 +3004,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 "Delete it after importing on another machine.",
                 parent=self,
             )
-        except Exception as e:
+        except (OSError, ValueError, TypeError) as e:
             messagebox.showerror("Export Failed", str(e), parent=self)
 
     def _platform_set_file_permissions(self, path):
@@ -2764,7 +3017,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         try:
             with open(path, encoding="utf-8") as f:
                 imported = json.load(f)
-        except Exception as e:
+        except (OSError, ValueError) as e:
             messagebox.showerror("Import Failed", str(e), parent=self)
             return
 
@@ -2947,7 +3200,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         if not self.current_cluster:
             return
         cluster = self.current_cluster
-        self.cluster_title.config(text=cluster["name"])
+        self._set_title(cluster["name"])
         if self._loaded_cluster != cluster["name"]:
             # Don't leave another cluster's VMs on screen under this cluster's name
             self._vms = []
@@ -2971,11 +3224,11 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                                                   "/api2/json/nodes"))
                 untrusted = next((r for r in (resources, nodes) if "tls_untrusted" in r), None)
                 if untrusted:
-                    self.after(0, lambda: self._certificate_refused(cluster, untrusted))
+                    self._post(lambda: self._certificate_refused(cluster, untrusted))
                     return
                 error = resources.get("error") or nodes.get("error")
                 if error:
-                    self.after(0, lambda: self._set_cluster_offline(cluster, f"Error: {error}"))
+                    self._post(lambda: self._set_cluster_offline(cluster, f"Error: {error}"))
                     return
                 # A request for a VM on an offline node waits seconds for Proxmox to
                 # give up (595), so those VMs are skipped and the node is named instead
@@ -3005,7 +3258,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                     vm["_snap_count"] = len([s for s in snap_data.get("data", [])
                                              if s.get("name") != "current"]) if "error" not in snap_data else 0
                     vm["_ips"], vm["_ip_note"] = [], "" if vm["_has_agent"] else "no agent"
-            self.after(0, lambda: update_ui(spice, len(qemu), offline))
+            self._post(lambda: update_ui(spice, len(qemu), offline))
 
         def update_ui(spice_vms, qemu_count, offline):
             if self.current_cluster is not cluster or self._closing:
@@ -3047,7 +3300,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         def one(vm):
             data = api_request(cluster["host"], f"{vm['_path']}/agent/network-get-interfaces",
                                auth=auth, timeout=3)
-            self.after(0, lambda: show(vm, data))
+            self._post(lambda: show(vm, data))
 
         def show(vm, data):
             if self._vms is not vms or self._closing:
@@ -3180,9 +3433,9 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             )
             spice_data = data.get("data")
 
-            if "error" in data or not spice_data or not spice_data.get("type"):
+            if "error" in data or not isinstance(spice_data, dict) or not spice_data.get("type"):
                 err = data.get("error", "Unknown Error")
-                self.after(0, lambda: (
+                self._post(lambda: (
                     self.status_label.config(text="Connection failed", fg=C["red"]),
                     messagebox.showerror("SPICE Error", err, parent=self),
                 ))
@@ -3190,7 +3443,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
 
             viewer = self._platform_find_viewer()
             if not viewer:
-                self.after(0, lambda: (
+                self._post(lambda: (
                     self.status_label.config(text="remote-viewer not found", fg=C["red"]),
                     messagebox.showerror(
                         "Missing", "remote-viewer not found.\nCheck prerequisites.",
@@ -3205,10 +3458,10 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 self._platform_set_vv_permissions(vv_path)
                 self._platform_launch_viewer(viewer, vv_path)
 
-                self.after(0, lambda: self.status_label.config(
+                self._post(lambda: self.status_label.config(
                     text=f"Connected to {vm['name']} ({vm['vmid']})", fg=C["green"]
                 ))
-            except Exception as e:
+            except (OSError, ValueError, subprocess.SubprocessError) as e:
                 if vv_path:
                     try:
                         os.unlink(vv_path)
@@ -3217,7 +3470,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 # Bind now: Python unbinds `e` when the except block ends,
                 # before the deferred callback runs.
                 err = str(e)
-                self.after(0, lambda: messagebox.showerror(
+                self._post(lambda: messagebox.showerror(
                     "Launch Error", err, parent=self
                 ))
 
@@ -3282,9 +3535,8 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                         text=f"{action_label} sent to {len(valid)} VM(s)", fg=C["green"]
                     )
 
-            if not self._closing:
-                self.after(0, on_done)
-                self.after(0, self._refresh_vms)
+            self._post(on_done)
+            self._post(self._refresh_vms)
 
         threading.Thread(target=do_action, daemon=True).start()
 
@@ -3319,11 +3571,11 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                 auth=saved_auth,
             )
             if "error" in data:
-                self.after(0, lambda: messagebox.showerror("Error", data["error"], parent=self))
+                self._post(lambda: messagebox.showerror("Error", data["error"], parent=self))
                 return
             snaps = [s for s in data.get("data", []) if s.get("name") != "current"]
             if not snaps:
-                self.after(0, lambda: messagebox.showinfo("No Snapshots", "No snapshots found.", parent=self))
+                self._post(lambda: messagebox.showinfo("No Snapshots", "No snapshots found.", parent=self))
                 return
 
             latest = max(snaps, key=lambda s: s.get("snaptime", 0))
@@ -3342,8 +3594,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
                         method="POST", auth=saved_auth,
                     )
                     error = rb.get("error") or wait_for_task(cluster["host"], saved_auth, rb.get("data"))
-                    if not self._closing:
-                        self.after(0, lambda: done(error))
+                    self._post(lambda: done(error))
 
                 def done(error):
                     self._refresh_vms()
@@ -3355,7 +3606,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
 
                 threading.Thread(target=do_rb, daemon=True).start()
 
-            self.after(0, confirm)
+            self._post(confirm)
 
         threading.Thread(target=fetch, daemon=True).start()
 
@@ -3396,7 +3647,7 @@ REQUIRED_DEPS = {
 
 
 # ─── System Helpers ───────────────────────────────────────────────────────────
-def _can_sudo():
+def _can_sudo() -> bool:
     if not shutil.which("sudo"):
         return False
     try:
@@ -3407,15 +3658,15 @@ def _can_sudo():
             ["groups"], capture_output=True, text=True, timeout=5
         ).stdout
         return "sudo" in groups or "wheel" in groups
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
-def _elevate_prefix():
+def _elevate_prefix() -> str:
     return "sudo" if _can_sudo() else "su -c"
 
 
-def detect_pkg_manager():
+def detect_pkg_manager() -> str | None:
     if shutil.which("dnf"):
         return "dnf"
     if shutil.which("apt"):
@@ -3423,7 +3674,7 @@ def detect_pkg_manager():
     return None
 
 
-def get_install_cmd(dep_info, fallback_name):
+def get_install_cmd(dep_info: dict[str, str], fallback_name: str) -> str:
     mgr = detect_pkg_manager()
     if not mgr:
         return f"# Install '{fallback_name}' using your package manager"
@@ -3434,7 +3685,7 @@ def get_install_cmd(dep_info, fallback_name):
     return f"su -c '{mgr} install {pkg}'"
 
 
-def check_deps():
+def check_deps() -> tuple[bool, dict[str, bool]]:
     results = {}
     all_ok = True
     for name, info in REQUIRED_DEPS.items():
@@ -3455,35 +3706,37 @@ def check_deps():
 
 
 # ─── Keyring Secret Management ──────────────────────────────────────────────
-def save_secret(cluster_name, secret):
+def save_secret(cluster_name: str, secret: str) -> str | None:
     """None once stored, else why not: the keyring's error (it never contains the secret)."""
     try:
         import keyring
         keyring.set_password(APP_ID, cluster_name, secret)
         return None
+    # Broad on purpose: keyring backends (SecretService, D-Bus, KWallet) raise their
+    # own exception types, and a missing keyring module is ImportError
     except Exception as e:
         print(f"[debug] save_secret failed: {type(e).__name__}", file=sys.stderr)
         return f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
 
 
-def get_secret(cluster_name):
+def get_secret(cluster_name: str) -> str | None:
     try:
         import keyring
         return keyring.get_password(APP_ID, cluster_name)
-    except Exception as e:
+    except Exception as e:  # any keyring backend's error, as in save_secret
         print(f"[debug] get_secret failed: {type(e).__name__}", file=sys.stderr)
         return None
 
 
-def delete_secret(cluster_name):
+def delete_secret(cluster_name: str) -> None:
     try:
         import keyring
         keyring.delete_password(APP_ID, cluster_name)
-    except Exception as e:
+    except Exception as e:  # any keyring backend's error, as in save_secret
         print(f"[debug] delete_secret failed: {type(e).__name__}", file=sys.stderr)
 
 
-def save_config(config):
+def save_config(config: Json) -> None:
     config["version"] = APP_VERSION
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     os.chmod(CONFIG_DIR, 0o700)
@@ -3492,7 +3745,7 @@ def save_config(config):
     os.chmod(CONFIG_FILE, 0o600)
 
 
-def migrate_secrets(config):
+def migrate_secrets(config: Json) -> None:
     try:
         import keyring
     except ImportError:
@@ -3507,7 +3760,7 @@ def migrate_secrets(config):
                     keyring.set_password(APP_ID, cluster["name"], secret)
                     del cluster["token_secret"]
                     changed = True
-                except Exception as e:
+                except Exception as e:  # any keyring backend's error, as in save_secret
                     print(f"[warn] Could not migrate secret for "
                           f"'{cluster['name']}' to keyring: {e} — "
                           "secret remains in config file", file=sys.stderr)
@@ -3806,7 +4059,7 @@ class PrereqDialog(tk.Toplevel):
                 try:
                     subprocess.Popen(term_cmd + run_args)
                     return True
-                except Exception:
+                except (OSError, ValueError):
                     continue
         return False
 
@@ -3890,7 +4143,7 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
         try:
             _icon_img = tk.PhotoImage(file=str(ICON_PATH))
             self.iconphoto(True, _icon_img)
-        except Exception:
+        except tk.TclError:
             pass
 
     def _platform_save_config(self, config):
@@ -4003,7 +4256,7 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
             try:
                 shutil.copy2(icon_value, dest_icon)
                 icon_value = str(dest_icon)
-            except Exception as e:
+            except OSError as e:
                 messagebox.showerror(
                     "Icon Error", f"Could not copy icon:\n{e}", parent=self
                 )
@@ -4014,7 +4267,7 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
             if current_script.resolve() != installed_script.resolve():
                 shutil.copy2(current_script, installed_script)
             os.chmod(installed_script, 0o755)
-        except Exception as e:
+        except OSError as e:
             messagebox.showerror(
                 "Install Failed", f"Could not copy script:\n{e}", parent=self
             )
@@ -4036,7 +4289,7 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
             with open(desktop_file, "w", encoding="utf-8") as f:
                 f.write(content)
             os.chmod(desktop_file, 0o755)
-        except Exception as e:
+        except OSError as e:
             messagebox.showerror(
                 "Install Failed",
                 f"Could not create desktop entry:\n{e}",
@@ -4054,19 +4307,19 @@ class ProxmoxSpiceManager(ProxmoxSpiceManagerBase):
 
 
 # ─── Launchers: --connect ────────────────────────────────────────────────────
-def launcher_command():
+def launcher_command() -> list[str]:
     """How to run this app again: the frozen binary, or this interpreter and this script."""
     if getattr(sys, "frozen", False):
         return [sys.executable]
     return [sys.executable, str(Path(__file__).resolve())]
 
 
-def desktop_value(text):
+def desktop_value(text: str) -> str:
     """A .desktop string value: one line, backslashes escaped."""
     return " ".join(text.split()).replace("\\", "\\\\")
 
 
-def desktop_exec_arg(arg):
+def desktop_exec_arg(arg: str) -> str:
     """One Exec argument, quoted by the Desktop Entry rules: \\ " ` $ escaped inside the
     quotes, then the general string escape for backslashes, and % doubled."""
     inner = re.sub(r'([\\"`$])', r"\\\1", arg)
@@ -4082,7 +4335,7 @@ _UNTRUSTED_FOR_LAUNCHER = (
     "Open the manager and refresh the cluster to check it.")
 
 
-def _launcher_auth(root, cluster):
+def _launcher_auth(root: tk.Tk, cluster: Json) -> Json:
     """Log in as the manager does: the keyring token, or a password prompt."""
     name, host, pin = cluster["name"], cluster["host"], cluster.get("tls_fingerprint")
     if cluster.get("auth_method") == "token":
@@ -4105,7 +4358,7 @@ def _launcher_auth(root, cluster):
     return auth
 
 
-def _launcher_start(root, call, name, base):
+def _launcher_start(root: tk.Tk, call: Callable[..., Json], name: str, base: str) -> None:
     """Offer to start a stopped VM, then wait up to a minute for it to run."""
     if not messagebox.askyesno("Start VM?", f"{name} isn't running. Start it and open its console?",
                                parent=root):
@@ -4120,7 +4373,7 @@ def _launcher_start(root, call, name, base):
     raise _LaunchStop(f"{name} didn't start within a minute.")
 
 
-def _launcher_open(root, config, cluster_name, vmid):
+def _launcher_open(root: tk.Tk, config: Json, cluster_name: str, vmid: int) -> None:
     cluster = next((c for c in config.get("clusters", []) if c.get("name") == cluster_name), None)
     if cluster is None:
         raise _LaunchStop(f"There is no cluster named \"{cluster_name}\" any more. It may have been "
@@ -4151,7 +4404,7 @@ def _launcher_open(root, config, cluster_name, vmid):
     subprocess.Popen([viewer, write_vv_file(spice["data"])], start_new_session=True)
 
 
-def quick_connect(cluster_name, vmid):
+def quick_connect(cluster_name: str, vmid: int) -> int:
     """--connect CLUSTER VMID: open one VM's SPICE console without the manager window, as
     the exported .desktop launchers do. Logs in like the manager (keyring token or a
     password prompt, pinned certificate), offers to start a stopped VM. Returns an exit code."""
