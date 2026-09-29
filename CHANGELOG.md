@@ -10,7 +10,7 @@ to the other where the platforms allow it.
 
 ## [Unreleased]
 
-## [3.0.0] - 2026-09-28
+## [3.0.0] - 2026-09-29
 
 ### Changed
 
