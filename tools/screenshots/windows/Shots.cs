@@ -3,6 +3,7 @@ using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -221,6 +222,15 @@ static class Program
     static void Populate(MainWindow w)
     {
         var config = Get<AppConfig>(w, "_config");
+        // The config is the Wine prefix's own, which the state shots change and the app saves;
+        // start every run from the defaults
+        config.GroupByNode = true;
+        config.VmSort = "vmid";
+        config.VmSortDesc = false;
+        config.ShowIpv6 = false;
+        ((ToggleButton)w.FindName("GroupToggle")).IsChecked = true;
+        ((ToggleButton)w.FindName("Ipv6Toggle")).IsChecked = false;
+        Call(w, "ApplySortAndGrouping");
         config.Clusters.Clear();
         foreach (var name in new[] { "Homelab", "Lab East", "DR Site" })
             config.Clusters.Add(new ClusterConfig { Name = name, Host = $"https://{name.ToLowerInvariant().Replace(' ', '-')}.example.com:8006" });

@@ -29,7 +29,7 @@ own, and the build. A first run takes under a minute.
 |---|---|
 | `windows-main.png`, `linux-main.png` | The main window, Catppuccin Mocha, first VM selected |
 | `*-main-<theme>.png` | The same in each theme |
-| `*-state-*.png` | Multi-select, search, the Running filter, a search with no matches, the flat list sorted by address, and (Linux) a folded node |
+| `*-state-*.png` | Multi-select, search, the Running filter, a search with no matches, the flat list sorted by address, the smallest window (1000×600, `*-state-small.png`), and (Linux) a folded node |
 | `linux-appearance.png`, `linux-settings.png` | The Linux popups (WPF popups can't be captured, see below) |
 | `proposal-*.png` | Design prototypes from `windows/proposals/` |
 | `shots.log` | Progress and errors |

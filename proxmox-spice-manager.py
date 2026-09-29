@@ -1254,7 +1254,7 @@ class ActionButton(tk.Frame):
     disabled state. tk.Button can't hold a right-aligned key hint."""
 
     def __init__(self, master, text, command, icon="", key="", bg=None, fg=None,
-                 hover_bg=None, border=None, bold=False, pady=6, padx=10, icon_fg=None):
+                 hover_bg=None, border=None, bold=False, pady=6, padx=10, icon_fg=None, elide=False):
         bg = bg or C["surface0"]
         super().__init__(master, bg=bg, highlightthickness=1,
                          highlightbackground=border or C["surface1"], cursor="hand2")
@@ -1290,8 +1290,12 @@ class ActionButton(tk.Frame):
         self.label.pack(side="left", fill="x", expand=True)
         self._parts.append(self.label)
         self._labels.append(self.label)
-        # Too narrow for the text: cut it with an ellipsis rather than mid-letter
-        self.label.bind("<Configure>", lambda e: self._fit_text())
+        # A button stretched to a fixed width (elide=True): text too long for it ends in
+        # an ellipsis rather than mid-letter. Only there: a button sized by its own text
+        # would shrink to the cut text and keep it.
+        self._elide = elide
+        if elide:
+            self.label.bind("<Configure>", lambda e: self._fit_text())
         for part in self._parts:
             part.bind("<Button-1>", self._click)
             part.bind("<Enter>", lambda e: self._paint(self._hover_bg))
@@ -1323,7 +1327,10 @@ class ActionButton(tk.Frame):
 
     def _fit_text(self):
         width = self.label.winfo_width()
-        text = self._text if width <= 1 else elide(self._text, width - 2, self._font)
+        if not self._elide or width <= 1:
+            text = self._text
+        else:
+            text = elide(self._text, width - 2, self._font)
         if self.label.cget("text") != text:
             self.label.config(text=text)
 
@@ -2443,6 +2450,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._insp = insp
         ActionButton(
             insp, "Force stop", self._stop_vm, icon="stop", key="Ctrl+.", fg=C["red"], pady=5,
+            elide=True,
         ).pack(side="bottom", fill="x", padx=20, pady=(8, 18))
         # Everything above Force stop scrolls when the window is too short for it
         scroll = tk.Frame(insp, bg=bg)
@@ -2492,7 +2500,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
         self._console_btn = ActionButton(
             body, "Open SPICE console", self._launch_spice, icon="monitor", key="Enter",
             bg=C["accent"], fg=C["on_accent"], border=C["accent"],
-            hover_bg=mix(C["accent"], C["mantle"], 0.15), bold=True, pady=8, padx=8,
+            hover_bg=mix(C["accent"], C["mantle"], 0.15), bold=True, pady=8, padx=8, elide=True,
         )
         self._console_btn.pack(fill="x", pady=(16, 0))
 
@@ -2547,7 +2555,7 @@ class ProxmoxSpiceManagerBase(tk.Tk):
             ("snapshots", "camera", "Snapshots", "P", self._show_snapshots),
             ("rollback", "undo", "Roll back to latest snapshot", "", self._quick_rollback),
         ):
-            btn = ActionButton(body, text, command, icon=icon, key=hint, pady=5)
+            btn = ActionButton(body, text, command, icon=icon, key=hint, pady=5, elide=True)
             btn.pack(fill="x", pady=(0, 5))
             self._action_btns[key] = btn
 
