@@ -87,6 +87,7 @@ static class Program
                 ApplyAppearance("Catppuccin Mocha", Themes.DefaultAccent);
                 Call(window, "RefreshClusterList");
                 CaptureStates(window, outDir);
+                CaptureAddCluster(window, outDir);
                 if (args.Length > 1)
                     CaptureProposals(window, args[1], outDir);
             }
@@ -168,6 +169,21 @@ static class Program
         collapsed.Clear();
         Call(w, "ApplySortAndGrouping");
         Log("states captured");
+    }
+
+    // First-run setup: the Add Cluster dialog, filled in, not modal so capturing can go on
+    static void CaptureAddCluster(MainWindow w, string outDir)
+    {
+        var dialog = new ProxmoxSpiceManager.Dialogs.ClusterDialog(Get<AppConfig>(w, "_config")) { Owner = w };
+        ((TextBox)dialog.FindName("NameBox")).Text = "Homelab";
+        ((TextBox)dialog.FindName("HostBox")).Text = "https://pve1.example.com:8006";
+        ((TextBox)dialog.FindName("TokenIdBox")).Text = "spice@pve!spice-manager";
+        ((PasswordBox)dialog.FindName("TokenSecretBox")).Password = "00000000-0000-0000-0000-000000000000";
+        dialog.Show();
+        Pump(600);
+        Capture(dialog, Path.Combine(outDir, "windows-add-cluster.png"));
+        dialog.Close();
+        Log("add cluster captured");
     }
 
     static MainWindow CreateWindow() => new()

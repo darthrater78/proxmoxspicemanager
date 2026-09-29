@@ -47,18 +47,20 @@ SPICE sessions will open but won't function correctly without guest drivers inst
 
 ## App Setup
 
-Open the SPICE Manager and choose **Add** from the lower left.
+Open the SPICE Manager and choose **Add cluster** from the lower left.
 
-Enter the name, any of the hosts in the cluster, and the token ID and secret. Take note of the format of the token ID.
+Enter the name, any of the hosts in the cluster, and the token ID and secret. Take note of the format of the token ID: `user@realm!tokenname`.
 
-<img width="508" height="518" alt="image" src="https://github.com/user-attachments/assets/3cec87b4-500d-4c79-9303-0bc8afae8f98" />
+| Windows | Linux |
+|---|---|
+| ![The Add Cluster dialog on Windows, filled in with a name, host URL, token ID and secret](docs/screenshots/windows-add-cluster.png) | ![The Add Cluster dialog on Linux, filled in the same way](docs/screenshots/linux-add-cluster.png) |
 
 Choose the cluster and hit **Refresh**. Any VM with the display set to SPICE will show up here.
 
-<img width="998" height="674" alt="image" src="https://github.com/user-attachments/assets/3bd7169e-c7b1-4a5c-b9fc-ab7dd83d19fd" />
+![The main window listing the cluster's SPICE VMs, grouped by node](docs/screenshots/windows-main.png)
 
-You can launch console sessions directly from the app, or on Linux you can export individual VM sessions as desktop shortcuts to launch them without opening the app.
+You can launch console sessions directly from the app, or on Linux you can export individual VM sessions as desktop shortcuts to launch them without opening the app. Select the VM, open **Settings**, and choose **Export .desktop for selected VM…**:
 
-<img width="788" height="279" alt="image" src="https://github.com/user-attachments/assets/58c46e71-edba-4821-a977-2c527bbc138d" />
+![The Linux Settings menu, with Export .desktop for selected VM at the bottom](docs/screenshots/linux-settings.png)
 
-<img width="656" height="133" alt="image" src="https://github.com/user-attachments/assets/7ca80959-040b-4525-994c-6e65a1bcaedd" />
+![The confirmation that the launcher was saved in ~/.local/share/applications](docs/screenshots/linux-export-desktop.png)

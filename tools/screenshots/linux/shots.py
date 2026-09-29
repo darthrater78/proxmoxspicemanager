@@ -7,6 +7,7 @@ X server (run.sh uses Xvfb).
 Usage: shots.py <path to proxmox-spice-manager.py> <output dir>
 """
 import importlib.util
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -88,6 +89,38 @@ def capture(app, name):
     print(f"wrote {out / name}")
 
 
+def capture_path(app, path, name):
+    """Grabs a window by its Tk path, which also finds Tk's own dialogs such as message boxes."""
+    x, y, w, h = (int(app.tk.call("winfo", q, path)) for q in ("rootx", "rooty", "width", "height"))
+    ImageGrab.grab(bbox=(x, y, x + w, y + h)).save(out / name)
+    print(f"wrote {out / name}")
+
+
+def capture_dialog(app, open_dialog, fill, name, close):
+    """Dialogs wait on themselves when they open; this captures and closes one from inside."""
+    def grab():
+        path = next(p for p in app.tk.splitlist(app.tk.call("winfo", "children", "."))
+                    if app.tk.call("winfo", "toplevel", p) == p
+                    and app.tk.call("winfo", "ismapped", p))
+        fill(path)
+        app.update()
+        app.after(300)
+        app.update()
+        capture_path(app, path, name)
+        close(path)
+    app.after(600, grab)
+    open_dialog()
+
+
+def fill_cluster(path):
+    dialog = app.nametowidget(path)
+    dialog.name_entry.insert(0, "Homelab")
+    dialog.host_entry.delete(0, "end")
+    dialog.host_entry.insert(0, "https://pve1.example.com:8006")
+    dialog.token_id_entry.insert(0, "spice@pve!spice-manager")
+    dialog.token_secret_entry.insert(0, "00000000-0000-0000-0000-000000000000")
+
+
 def appearance(app, theme, accent=psm.DEFAULT_ACCENT):
     app._apply_appearance(theme=theme, accent=accent)
     # It reopens the flyout shortly after; let that happen, then close it
@@ -145,6 +178,16 @@ def run(app):
     app._open_settings()
     capture(app, "linux-settings.png")
     app._close_popup()
+
+    # First-run setup: the Add Cluster dialog, and a VM's launcher exported to the app menu
+    capture_dialog(app, app._add_cluster, fill_cluster, "linux-add-cluster.png",
+                   lambda path: app.nametowidget(path).destroy())
+    os.environ["HOME"] = str(config_dir)  # the launcher is written under ~/.local/share
+    showinfo = psm.messagebox.showinfo
+    psm.messagebox.showinfo = lambda title, message, **kw: showinfo(
+        title, message.replace(str(config_dir), "~"), **kw)
+    capture_dialog(app, app._export_desktop, lambda path: None, "linux-export-desktop.png",
+                   lambda path: app.tk.call(f"{path}.ok", "invoke"))
     app.destroy()
 
 

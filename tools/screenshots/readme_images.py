@@ -1,5 +1,5 @@
-"""Copies the screenshots the README shows from a run.sh output directory into
-docs/screenshots/, and builds the theme grid from the per-theme captures.
+"""Copies the screenshots the README and proxmox-setup.md show from a run.sh output
+directory into docs/screenshots/, and builds the theme grid from the per-theme captures.
 
 Usage: readme_images.py <run.sh output dir> <docs/screenshots dir>
 """
@@ -17,6 +17,10 @@ COPIES = {
     "windows-state-multiselect.png": "multi-select.png",
     "windows-state-ungrouped.png": "flat-list.png",
     "linux-settings.png": "linux-settings.png",
+    # proxmox-setup.md, App Setup
+    "windows-add-cluster.png": "windows-add-cluster.png",
+    "linux-add-cluster.png": "linux-add-cluster.png",
+    "linux-export-desktop.png": "linux-export-desktop.png",
 }
 
 
