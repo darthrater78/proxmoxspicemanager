@@ -55,6 +55,25 @@ public static class ConfigService
         cluster.TokenSecretEnc = DpapiService.Encrypt(secret);
     }
 
+    // Every DPAPI blob starts with this header (version 1 + the DPAPI provider GUID), base64
+    private const string DpapiPrefix = "AQAAANCMnd8BFdERjHoAwE/Cl+";
+
+    // The secret in an imported cluster: token_secret (export files from 3.0.0 on, both apps),
+    // else token_secret_enc, which is this user's DPAPI blob when re-importing a config file
+    // and the plaintext secret in exports from the Windows app before 3.0.0. A DPAPI blob
+    // from another user or machine can't be decrypted: null, and the secret must be re-entered.
+    public static string? ImportedSecret(ClusterConfig cluster)
+    {
+        if (!string.IsNullOrEmpty(cluster.TokenSecret))
+            return cluster.TokenSecret;
+        var enc = cluster.TokenSecretEnc;
+        if (string.IsNullOrEmpty(enc))
+            return null;
+        if (enc.StartsWith(DpapiPrefix, StringComparison.Ordinal))
+            return OperatingSystem.IsWindows() ? DpapiService.Decrypt(enc) : null;
+        return enc;
+    }
+
     public static void DeleteSecret(ClusterConfig cluster)
     {
         cluster.TokenSecretEnc = null;

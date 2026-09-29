@@ -16,17 +16,17 @@ chmod +x proxmox-spice-manager.py
 
 Run the script. A prerequisite check should appear on first launch.
 
-<img width="665" height="579" alt="image" src="https://github.com/user-attachments/assets/51df513d-68b8-412e-a8c7-de87e238b8ff" />
+![The prerequisite check on Fedora, listing virt-viewer and python3-keyring as not found, each with an Install button and its dnf command](docs/screenshots/linux-prereqs-fedora.png)
 
 Click to install anything that is missing. A password prompt will appear.
 
 <img width="1508" height="616" alt="image" src="https://github.com/user-attachments/assets/05cced05-acf3-4c57-bf2d-823081a5249c" />
 
-After the recheck completes, the window will close and the app should pop up. To "install" the app, use the **Install To App Menu** option in the upper right. You can choose a bundled icon or use a custom one.
+After the recheck completes, the window will close and the app should pop up. To "install" the app, open **Settings** (bottom left) and choose **Install to app menu…**. You can choose a bundled icon or use a custom one.
 
-<img width="1039" height="704" alt="image" src="https://github.com/user-attachments/assets/ced942a2-0759-4b86-8576-88b9a471bd45" />
+![The Settings menu, with Install to app menu near the bottom](docs/screenshots/linux-settings.png)
 
-<img width="393" height="328" alt="image" src="https://github.com/user-attachments/assets/c0343bab-4da4-4577-83f6-daf41fc45c88" />
+![The icon picker: ten system icons, or a custom icon file](docs/screenshots/linux-icon-picker.png)
 
 You can then search for it and pin it to your taskbar.
 
@@ -48,7 +48,7 @@ The app will display the exact install command it needs — copy it, run it in y
 
 You'll then get the setup install screen for whatever else may be missing.
 
-<img width="1029" height="625" alt="image" src="https://github.com/user-attachments/assets/86a3141d-2cb4-4c6b-9e8a-aeddc30a5400" />
+![The prerequisite check on Debian, where the install commands use su -c instead of sudo](docs/screenshots/linux-prereqs-debian.png)
 
 ---
 

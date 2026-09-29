@@ -2,14 +2,14 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Net;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
-using System.Windows.Media;
+using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using ProxmoxSpiceManager.Models;
 using ProxmoxSpiceManager.Services;
 
@@ -23,31 +23,38 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, AuthInfo> _authCache = new();
     private ObservableCollection<VmDisplayItem> _vmItems = [];
     private ICollectionView? _vmView;
-    private readonly Dictionary<string, string> _activeFilters = new();
+    // Node headings folded away; kept across refreshes and regrouping
+    private readonly HashSet<string> _collapsedNodes = new();
+    private string? _loadedClusterName;
+    private List<string> _offlineNodes = [];  // named in the summary; their VMs aren't listed
 
-    // Exposed for XAML binding
-    public List<string> NoteOptionsList => _config.NoteOptions ?? [];
+    // Single source of truth for the version is <Version> in the csproj.
+    private static readonly string AppVersion =
+        typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
     public MainWindow()
     {
         InitializeComponent();
+        Title = $"Proxmox SPICE Manager v{AppVersion}";
+        VersionText.Text = $"for Proxmox VE · v{AppVersion}";
+        ReleaseNotesLink.ToolTip = $"What's new in v{AppVersion}";
         _config = ConfigService.Load();
         _config.NoteOptions ??= [];
         _config.VmNotes ??= new Dictionary<string, string>();
         ConfigService.MigrateSecrets(_config);
 
-        ThemeCombo.ItemsSource = Themes.All.Keys.ToList();
-        ThemeCombo.SelectedItem = _config.Theme;
-
-        VmGrid.ItemsSource = _vmItems;
+        VmList.ItemsSource = _vmItems;
         _vmView = CollectionViewSource.GetDefaultView(_vmItems);
         _vmView.Filter = VmFilterPredicate;
-
-        // Right-click on column headers — use Preview (tunneling) so it fires before DataGrid swallows it
-        VmGrid.PreviewMouseRightButtonUp += OnColumnHeaderRightClick;
+        if (!VmComparer.Labels.ContainsKey(_config.VmSort)) _config.VmSort = "vmid";
+        GroupToggle.IsChecked = _config.GroupByNode;
+        VmDisplayItem.ShowIpv6 = _config.ShowIpv6;
+        Ipv6Toggle.IsChecked = _config.ShowIpv6;
+        ApplySortAndGrouping();
 
         RefreshClusterList();
-        UpdateDebugLogUi();
+        UpdateListState();
+        UpdateInspector();
 
         if (_config.Clusters.Count > 0)
         {
@@ -63,14 +70,58 @@ public partial class MainWindow : Window
         ConfigService.Save(_config);
     }
 
-    // ── Theme ──────────────────────────────────────────────────────────────
-    private void OnThemeChanged(object sender, SelectionChangedEventArgs e)
+    // ── Appearance ─────────────────────────────────────────────────────────
+    private void OnOpenAppearance(object sender, RoutedEventArgs e)
     {
-        if (ThemeCombo.SelectedItem is not string themeName) return;
-        _config.Theme = themeName;
-        ThemeManager.Apply(themeName);
+        RefreshAppearanceChoices();
+        // Line the flyout up with the sidebar rather than with the small button
+        AppearancePopup.HorizontalOffset = -AppearanceBtn.TranslatePoint(new Point(0, 0), this).X;
+        AppearancePopup.IsOpen = true;
+    }
+
+    private void RefreshAppearanceChoices()
+    {
+        ThemeChoices.ItemsSource = Themes.All.Values.Select(t => new ThemeChoice
+        {
+            Name = t.Name,
+            Crust = new SolidColorBrush(t.Crust),
+            Base = new SolidColorBrush(t.Base),
+            Surface = new SolidColorBrush(t.Surface1),
+            Text = new SolidColorBrush(t.Subtext0),
+            Accent = new SolidColorBrush(Themes.AccentColor(t, ThemeManager.CurrentAccent)),
+            IsSelected = t.Name == ThemeManager.Current.Name,
+        }).ToList();
+        AccentChoices.ItemsSource = Themes.Accents.Keys.Select(a => new AccentChoice
+        {
+            Name = a,
+            Brush = new SolidColorBrush(Themes.AccentColor(ThemeManager.Current, a)),
+            IsSelected = a == ThemeManager.CurrentAccent,
+        }).ToList();
+        AccentName.Text = ThemeManager.CurrentAccent == Themes.DefaultAccent
+            ? $"{Themes.DefaultAccent} (default)"
+            : ThemeManager.CurrentAccent;
+    }
+
+    private void OnThemeChoice(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not ThemeChoice choice) return;
+        _config.Theme = choice.Name;
+        ApplyAppearance();
+    }
+
+    private void OnAccentChoice(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not AccentChoice choice) return;
+        _config.Accent = choice.Name;
+        ApplyAppearance();
+    }
+
+    private void ApplyAppearance()
+    {
+        ThemeManager.Apply(_config.Theme, _config.Accent);
         SaveConfig();
         RefreshClusterList();
+        RefreshAppearanceChoices();
     }
 
     // ── Cluster List ───────────────────────────────────────────────────────
@@ -95,12 +146,13 @@ public partial class MainWindow : Window
 
     private void OnClusterClick(object sender, MouseButtonEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is ClusterListItem item)
-        {
-            _selectedClusterIdx = item.Index;
-            RefreshClusterList();
+        if (sender is not FrameworkElement fe || fe.DataContext is not ClusterListItem item) return;
+        _selectedClusterIdx = item.Index;
+        RefreshClusterList();
+        if (e.ClickCount == 2)
+            EditCluster();
+        else
             _ = RefreshVmsAsync();
-        }
     }
 
     private void OnAddCluster(object sender, RoutedEventArgs e)
@@ -118,7 +170,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnEditCluster(object sender, RoutedEventArgs e)
+    private void EditCluster()
     {
         if (_selectedClusterIdx < 0 || _selectedClusterIdx >= _config.Clusters.Count) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
@@ -135,7 +187,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnRemoveCluster(object sender, RoutedEventArgs e)
+    private void RemoveCluster()
     {
         if (_selectedClusterIdx < 0 || _selectedClusterIdx >= _config.Clusters.Count) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
@@ -150,14 +202,67 @@ public partial class MainWindow : Window
 
         _selectedClusterIdx = Math.Min(_selectedClusterIdx, _config.Clusters.Count - 1);
         _vmItems.Clear();
+        _loadedClusterName = null;
         RefreshClusterList();
+        UpdateListState();
+        if (_selectedClusterIdx >= 0)
+            _ = RefreshVmsAsync();
+        else
+        {
+            ClusterTitle.Text = "No cluster";
+            FitHeader();
+            StatusLabel.Text = "Add a cluster to get started";
+        }
     }
 
     // ── Auth ───────────────────────────────────────────────────────────────
+    // Show a certificate this system doesn't trust and pin it on yes (like SSH's host
+    // keys). It was refused in the TLS handshake, so no token or password was sent.
+    private bool TrustCertificate(ClusterConfig cluster, string fingerprint, bool changed)
+    {
+        var host = Uri.TryCreate(cluster.Host, UriKind.Absolute, out var uri) ? uri.Host : cluster.Host;
+        const string where = "Compare it with Proxmox: Node → System → Certificates → Fingerprint.";
+        var answer = changed
+            ? MessageBox.Show(this,
+                $"The certificate of {cluster.Name} ({host}) is not the one you trusted.\n\n" +
+                "That is expected after the certificate is renewed. It is also what someone " +
+                "intercepting the connection would look like.\n\n" +
+                $"New SHA-256 fingerprint:\n{fingerprint}\n\n{where}\n\nTrust the new certificate?",
+                "Certificate changed", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+            : MessageBox.Show(this,
+                $"{host} presents a certificate this computer doesn't trust. Proxmox's own " +
+                "certificate is self-signed, so this is normal the first time.\n\n" +
+                $"SHA-256 fingerprint:\n{fingerprint}\n\n{where}\n\n" +
+                $"Trust it for {cluster.Name}? Nothing has been sent to the server yet.",
+                "Trust this certificate?", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
+        if (answer != MessageBoxResult.Yes)
+            return false;
+        cluster.TlsFingerprint = fingerprint;
+        if (_authCache.TryGetValue(cluster.Name, out var cached))
+            cached.TlsFingerprint = fingerprint;
+        SaveConfig();
+        return true;
+    }
+
+    // Proxmox tickets last 2 hours. A cached one is renewed after an hour (the ticket works as
+    // the password for that), and one this close to expiring is dropped and the password asked.
+    private static readonly TimeSpan TicketRenewAfter = TimeSpan.FromMinutes(60);
+    private static readonly TimeSpan TicketMaxAge = TimeSpan.FromMinutes(110);
+
     private async Task<AuthInfo?> GetAuthAsync(ClusterConfig cluster)
     {
         if (_authCache.TryGetValue(cluster.Name, out var cached))
-            return cached;
+        {
+            var age = DateTime.UtcNow - cached.Issued;
+            if (cached.Ticket == null || age < TicketRenewAfter)
+                return cached;
+            if (age < TicketMaxAge && await PasswordLoginAsync(cluster, cached.Ticket) is { } renewed)
+            {
+                DebugLogger.Log($"[Auth] Ticket for {cluster.Name} renewed");
+                return renewed;
+            }
+            _authCache.Remove(cluster.Name);
+        }
 
         if (cluster.AuthMethod == "token")
         {
@@ -171,7 +276,7 @@ public partial class MainWindow : Window
             {
                 TokenId = cluster.TokenId,
                 TokenSecret = secret,
-                SkipTlsVerify = cluster.SkipTlsVerify,
+                TlsFingerprint = cluster.TlsFingerprint,
             };
             _authCache[cluster.Name] = auth;
             return auth;
@@ -182,16 +287,30 @@ public partial class MainWindow : Window
         if (pwDlg.ShowDialog() != true || pwDlg.Password == null)
             return null;
 
-        var authResult = await ProxmoxApi.AuthenticatePasswordAsync(
-            cluster.Host, cluster.Username, pwDlg.Password, cluster.SkipTlsVerify);
-
+        var authResult = await PasswordLoginAsync(cluster, pwDlg.Password);
         if (authResult == null)
-        {
             StatusLabel.Text = "Authentication failed.";
-            return null;
-        }
-        _authCache[cluster.Name] = authResult;
         return authResult;
+    }
+
+    // A ticket for the cluster's user, cached, from a password or the current ticket; or null
+    private async Task<AuthInfo?> PasswordLoginAsync(ClusterConfig cluster, string password)
+    {
+        while (true)
+        {
+            ProxmoxApi.TakeTlsFailure(cluster.Host);
+            var auth = await ProxmoxApi.AuthenticatePasswordAsync(
+                cluster.Host, cluster.Username, password, cluster.TlsFingerprint);
+            if (auth != null)
+            {
+                _authCache[cluster.Name] = auth;
+                return auth;
+            }
+            // Refused in the TLS handshake, so the password wasn't sent: confirm, then log in
+            if (ProxmoxApi.TakeTlsFailure(cluster.Host) is not { } refused ||
+                !TrustCertificate(cluster, refused.Fingerprint, refused.Changed))
+                return null;
+        }
     }
 
     // ── VM Refresh ─────────────────────────────────────────────────────────
@@ -201,6 +320,14 @@ public partial class MainWindow : Window
             return;
 
         var cluster = _config.Clusters[_selectedClusterIdx];
+        ClusterTitle.Text = cluster.Name;
+        FitHeader();
+        if (_loadedClusterName != cluster.Name)
+        {
+            // Don't leave another cluster's VMs on screen under this cluster's name
+            _vmItems.Clear();
+            UpdateListState();
+        }
         StatusLabel.Text = $"Loading VMs from {cluster.Name}...";
         var totalSw = DebugLogger.StartTimer($"RefreshVmsAsync for {cluster.Name}");
 
@@ -215,7 +342,8 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // Phase 1: Fetch pool memberships and node list in parallel
+            // Phase 1: every VM (cluster/resources) and each node's state, in parallel
+            ProxmoxApi.TakeTlsFailure(cluster.Host);  // only this refresh's refusal may prompt
             var phaseSw = DebugLogger.StartTimer("Phase 1: cluster/resources + nodes");
             var resourcesTask = ProxmoxApi.RequestAsync(
                 cluster.Host, "/api2/json/cluster/resources?type=vm", auth: auth);
@@ -224,23 +352,22 @@ public partial class MainWindow : Window
             await Task.WhenAll(resourcesTask, nodesTask);
             DebugLogger.StopTimer(phaseSw, "Phase 1: cluster/resources + nodes");
 
-            var poolMap = new Dictionary<int, string>();
-            var resourcesJson = await resourcesTask;
-            if (resourcesJson?.TryGetProperty("data", out var resData) == true)
-            {
-                foreach (var res in resData.EnumerateArray())
-                {
-                    if (res.TryGetProperty("vmid", out var rvmid) &&
-                        res.TryGetProperty("pool", out var rpool) &&
-                        rpool.GetString() is string poolName && poolName.Length > 0)
-                    {
-                        poolMap[rvmid.GetInt32()] = poolName;
-                    }
-                }
-            }
-
             var nodesJson = await nodesTask;
-            if (nodesJson == null || !nodesJson.Value.TryGetProperty("data", out var nodesData))
+            var resourcesJson = await resourcesTask;
+            if ((nodesJson == null || resourcesJson == null) && ProxmoxApi.TakeTlsFailure(cluster.Host) is { } refused)
+            {
+                if (TrustCertificate(cluster, refused.Fingerprint, refused.Changed))
+                {
+                    await RefreshVmsAsync();
+                    return;
+                }
+                StatusLabel.Text = "Certificate not trusted";
+                _clusterStatus[cluster.Name] = (false, null);
+                RefreshClusterList();
+                return;
+            }
+            if (nodesJson == null || !nodesJson.Value.TryGetProperty("data", out var nodesData) ||
+                resourcesJson == null || !resourcesJson.Value.TryGetProperty("data", out var resData))
             {
                 StatusLabel.Text = $"Failed to connect to {cluster.Name}";
                 _clusterStatus[cluster.Name] = (false, null);
@@ -248,37 +375,38 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // Phase 2: Fetch per-node VM lists in parallel
-            var nodeNames = nodesData.EnumerateArray()
-                .Select(n => n.GetProperty("node").GetString() ?? "")
-                .Where(n => n.Length > 0)
-                .ToList();
-
-            phaseSw = DebugLogger.StartTimer($"Phase 2: per-node VM lists ({nodeNames.Count} nodes)");
-            var nodeVmTasks = nodeNames.Select(nodeName =>
-                ProxmoxApi.RequestAsync(cluster.Host, $"/api2/json/nodes/{nodeName}/qemu", auth: auth)
-            ).ToList();
-            var nodeVmResults = await Task.WhenAll(nodeVmTasks);
-            DebugLogger.StopTimer(phaseSw, $"Phase 2: per-node VM lists ({nodeNames.Count} nodes)");
+            // A request for a VM on an offline node waits seconds for Proxmox to give up
+            // (595), so those VMs are skipped and the node is named in the summary
+            var onlineNodes = new HashSet<string>();
+            var offlineNodes = new List<string>();
+            foreach (var node in nodesData.EnumerateArray())
+            {
+                var name = node.TryGetProperty("node", out var nn) ? nn.GetString() ?? "" : "";
+                if (name.Length == 0) continue;
+                if (node.TryGetProperty("status", out var ns) && ns.GetString() == "online")
+                    onlineNodes.Add(name);
+                else
+                    offlineNodes.Add(name);
+            }
+            offlineNodes.Sort(StringComparer.Ordinal);
 
             var vmEntries = new List<(int vmid, string name, string status, string nodeName, string pool)>();
-            for (int i = 0; i < nodeNames.Count; i++)
+            foreach (var res in resData.EnumerateArray())
             {
-                var vmJson = nodeVmResults[i];
-                if (vmJson == null || !vmJson.Value.TryGetProperty("data", out var vmData))
+                if (!res.TryGetProperty("type", out var rtype) || rtype.GetString() != "qemu" ||
+                    !res.TryGetProperty("vmid", out var rvmid) ||
+                    !res.TryGetProperty("node", out var rnode) || rnode.GetString() is not string nodeName ||
+                    !onlineNodes.Contains(nodeName))
                     continue;
-
-                foreach (var vm in vmData.EnumerateArray())
-                {
-                    var vmid = vm.GetProperty("vmid").GetInt32();
-                    var name = vm.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                    var status = vm.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
-                    var pool = poolMap.GetValueOrDefault(vmid, "");
-                    vmEntries.Add((vmid, name, status, nodeNames[i], pool));
-                }
+                vmEntries.Add((rvmid.GetInt32(),
+                    res.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                    res.TryGetProperty("status", out var st) ? st.GetString() ?? "" : "",
+                    nodeName,
+                    res.TryGetProperty("pool", out var rpool) ? rpool.GetString() ?? "" : ""));
             }
 
-            DebugLogger.Log($"[Refresh] Found {vmEntries.Count} total VMs across {nodeNames.Count} nodes");
+            DebugLogger.Log($"[Refresh] Found {vmEntries.Count} VMs on {onlineNodes.Count} online nodes" +
+                            (offlineNodes.Count > 0 ? $"; offline: {string.Join(", ", offlineNodes)}" : ""));
 
             // Phase 3: Fetch config for all VMs in parallel to check for SPICE display
             phaseSw = DebugLogger.StartTimer($"Phase 3: VM configs ({vmEntries.Count} VMs)");
@@ -289,11 +417,13 @@ public partial class MainWindow : Window
             var configResults = await Task.WhenAll(configTasks);
             DebugLogger.StopTimer(phaseSw, $"Phase 3: VM configs ({vmEntries.Count} VMs)");
 
-            var spiceVms = new List<(int vmid, string name, string status, string nodeName, string pool, bool hasAgent)>();
+            var spiceVms = new List<(int vmid, string name, string status, string nodeName, string pool, bool hasAgent, string osType, string description)>();
             for (int i = 0; i < vmEntries.Count; i++)
             {
                 bool hasSpice = false;
                 bool hasAgent = false;
+                string osType = "";
+                string description = "";
                 if (configResults[i]?.TryGetProperty("data", out var cfgData) == true)
                 {
                     foreach (var prop in cfgData.EnumerateObject())
@@ -301,13 +431,16 @@ public partial class MainWindow : Window
                         if (prop.Name.StartsWith("vga") &&
                             prop.Value.GetString()?.Contains("qxl") == true)
                             hasSpice = true;
-                        if (prop.Name == "agent" &&
-                            prop.Value.GetString()?.StartsWith("1") == true)
+                        if (prop.Name == "agent" && AgentEnabled(prop.Value.ToString()))
                             hasAgent = true;
+                        if (prop.Name == "ostype")
+                            osType = prop.Value.GetString() ?? "";
+                        if (prop.Name == "description")
+                            description = prop.Value.GetString() ?? "";
                     }
                 }
                 if (hasSpice) spiceVms.Add((vmEntries[i].vmid, vmEntries[i].name,
-                    vmEntries[i].status, vmEntries[i].nodeName, vmEntries[i].pool, hasAgent));
+                    vmEntries[i].status, vmEntries[i].nodeName, vmEntries[i].pool, hasAgent, osType, description));
             }
 
             DebugLogger.Log($"[Refresh] {spiceVms.Count} SPICE-enabled VMs found");
@@ -343,19 +476,25 @@ public partial class MainWindow : Window
                     Status = e.status,
                     SnapCount = snapCount,
                     HasAgent = e.hasAgent,
-                    IpAddress = e.hasAgent ? "" : "no agent",
+                    OsType = e.osType,
+                    IpNote = e.hasAgent ? "" : "no agent",
                     Notes = LookupVmNote(e.vmid) ?? "",
+                    ProxmoxNotes = e.description,
                 });
             }
 
+            // Keep the selection across the reload so actions can be followed up
+            var keepSelected = GetSelectedVms().Select(v => v.VmId).ToHashSet();
             _vmItems.Clear();
             foreach (var vm in vms.OrderBy(v => v.VmId))
                 _vmItems.Add(vm);
+            _loadedClusterName = cluster.Name;
+            _offlineNodes = offlineNodes;
 
             _clusterStatus[cluster.Name] = (true, vms.Count);
             RefreshClusterList();
             DebugLogger.StopTimer(totalSw, $"RefreshVmsAsync for {cluster.Name} — {vms.Count} SPICE VMs");
-            StatusLabel.Text = $"{vms.Count} SPICE-enabled VM(s) on {cluster.Name}";
+            OnVmsLoaded(keepSelected);
 
             // Phase 4b: Fetch guest-agent IPs in background — only for running VMs with agent enabled
             var runningVms = _vmItems.Where(v => v.IsRunning && v.HasAgent).ToList();
@@ -376,13 +515,14 @@ public partial class MainWindow : Window
                         {
                             if (ipJson == null)
                             {
-                                capturedVm.IpAddress = "agent error";
+                                capturedVm.IpNote = "agent error";
                                 Interlocked.Increment(ref errorCount);
                             }
                             else
                             {
-                                var ip = ParseIpAddress(ipJson);
-                                capturedVm.IpAddress = ip.Length > 0 ? ip : "";
+                                capturedVm.Ips = ParseAgentIps(ipJson);
+                                UpdateColumns();
+                                if (GetSelectedVms() is [var only] && only == capturedVm) ShowAddresses(only);
                             }
                         });
                     }
@@ -392,7 +532,7 @@ public partial class MainWindow : Window
                         Interlocked.Increment(ref errorCount);
                         await Dispatcher.InvokeAsync(() =>
                         {
-                            capturedVm.IpAddress = "agent error";
+                            capturedVm.IpNote = "agent error";
                         });
                     }
                 })).ToList();
@@ -402,7 +542,7 @@ public partial class MainWindow : Window
                     Dispatcher.InvokeAsync(() =>
                     {
                         if (errorCount > 0)
-                            StatusLabel.Text = $"{vms.Count} SPICE VM(s) on {cluster.Name} — {errorCount} agent error(s)";
+                            StatusLabel.Text = $"{ClusterSummary()} · {errorCount} agent error(s)";
                     });
                 });
             }
@@ -416,50 +556,511 @@ public partial class MainWindow : Window
         }
     }
 
-    private static string ParseIpAddress(JsonElement? ipJson)
+    // "1" or "enabled=1,fstrim_cloned_disks=1" in a VM config's agent option
+    private static bool AgentEnabled(string value) =>
+        value.StartsWith('1') || value.Split(',').Contains("enabled=1");
+
+    // Addresses live on the guest's adapters: loopback, link-local and unspecified
+    // left out, IPv4 first, each family in adapter order
+    private static List<(string Adapter, string Ip)> ParseAgentIps(JsonElement? ipJson)
     {
+        var found = new List<(string Adapter, string Ip)>();
         if (ipJson?.TryGetProperty("data", out var agentData) != true ||
-            !agentData.TryGetProperty("result", out var ifaces))
-            return "";
+            !agentData.TryGetProperty("result", out var ifaces) ||
+            ifaces.ValueKind != JsonValueKind.Array)
+            return found;
 
         foreach (var iface in ifaces.EnumerateArray())
         {
-            var ifName = iface.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-            if (ifName == "lo") continue;
-            if (iface.TryGetProperty("ip-addresses", out var addrs))
+            var adapter = iface.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+            if (!iface.TryGetProperty("ip-addresses", out var addrs) || addrs.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var addr in addrs.EnumerateArray())
             {
-                foreach (var addr in addrs.EnumerateArray())
-                {
-                    if (addr.TryGetProperty("ip-address-type", out var t) &&
-                        t.GetString() == "ipv4" &&
-                        addr.TryGetProperty("ip-address", out var ip))
-                    {
-                        return ip.GetString() ?? "";
-                    }
-                }
+                if (!addr.TryGetProperty("ip-address", out var ipEl) ||
+                    !System.Net.IPAddress.TryParse((ipEl.GetString() ?? "").Split('%')[0], out var ip))
+                    continue;
+                if (System.Net.IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || IsIpv4LinkLocal(ip) ||
+                    ip.Equals(System.Net.IPAddress.Any) || ip.Equals(System.Net.IPAddress.IPv6Any))
+                    continue;
+                found.Add((adapter, ip.ToString()));
             }
         }
-        return "";
+        return found.OrderBy(a => a.Ip.Contains(':')).ToList();
     }
+
+    private static bool IsIpv4LinkLocal(System.Net.IPAddress ip) =>
+        ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+        ip.GetAddressBytes() is [169, 254, ..];
 
     private void OnRefresh(object sender, RoutedEventArgs e) => _ = RefreshVmsAsync();
 
-    // ── VM Actions ─────────────────────────────────────────────────────────
-    private List<VmDisplayItem> GetSelectedVms()
+    // ── List state: counts, filters, summary ──────────────────────────────
+    // Called once a cluster's VMs are in _vmItems
+    private void OnVmsLoaded(HashSet<int>? keepSelected = null)
     {
-        var visible = (_vmView?.OfType<VmDisplayItem>() ?? _vmItems).ToHashSet();
-        var checked_ = _vmItems.Where(v => v.IsChecked && visible.Contains(v)).ToList();
-        if (checked_.Count > 0) return checked_;
-
-        if (VmGrid.SelectedItem is VmDisplayItem selected)
-            return [selected];
-
-        return [];
+        UpdateColumns();
+        UpdateListState();
+        StatusLabel.Text = ClusterSummary();
+        if (keepSelected is { Count: > 0 })
+        {
+            foreach (var vm in _vmView?.OfType<VmDisplayItem>() ?? [])
+                if (keepSelected.Contains(vm.VmId) && IsShown(vm))
+                    VmList.SelectedItems.Add(vm);
+        }
+        if (VmList.SelectedItems.Count == 0)
+            VmList.SelectedItem = _vmView?.OfType<VmDisplayItem>().FirstOrDefault(IsShown);
     }
 
-    private async Task VmActionAsync(string action, string confirmMsg)
+    private string ClusterSummary()
     {
+        var nodes = _vmItems.Select(v => v.Node).Distinct().Count();
+        var parts = new List<string>
+        {
+            _vmItems.Count == 1 ? "1 SPICE VM" : $"{_vmItems.Count} SPICE VMs",
+            nodes == 1 ? "1 node" : $"{nodes} nodes",
+        };
+        if (_selectedClusterIdx >= 0 && _selectedClusterIdx < _config.Clusters.Count &&
+            Uri.TryCreate(_config.Clusters[_selectedClusterIdx].Host, UriKind.Absolute, out var uri))
+            parts.Add(uri.Host);
+        if (_offlineNodes.Count > 0)
+            parts.Add(_offlineNodes.Count == 1 ? $"1 node offline ({_offlineNodes[0]})"
+                : $"{_offlineNodes.Count} nodes offline ({string.Join(", ", _offlineNodes)})");
+        return string.Join(" · ", parts);
+    }
+
+    private void UpdateListState()
+    {
+        var running = _vmItems.Count(v => v.IsRunning);
+        FilterAll.Content = $"All  {_vmItems.Count}";
+        FilterRunning.Content = $"Running  {running}";
+        FilterStopped.Content = $"Stopped  {_vmItems.Count - running}";
+        Dispatcher.BeginInvoke(FitChips, System.Windows.Threading.DispatcherPriority.Loaded);
+        _vmView?.Refresh();
+        var visible = _vmView?.OfType<VmDisplayItem>().Any() == true;
+        var first = _vmView?.OfType<VmDisplayItem>().FirstOrDefault(IsShown);
+        // Keep something selected (the top match after a search), so Enter always has a target
+        if (first != null && VmList.SelectedItems.Count == 0)
+            VmList.SelectedItem = first;
+        EmptyText.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        EmptyText.Text = _vmItems.Count == 0
+            ? (_selectedClusterIdx < 0 ? "Add a cluster to see its VMs" : "No SPICE VMs loaded")
+            : "No VMs match the filter";
+    }
+
+    private bool VmFilterPredicate(object obj)
+    {
+        if (obj is not VmDisplayItem vm) return false;
+        if (FilterRunning.IsChecked == true && !vm.IsRunning) return false;
+        if (FilterStopped.IsChecked == true && vm.IsRunning) return false;
+
+        var q = SearchBox.Text.Trim();
+        if (q.Length == 0) return true;
+        return new[] { vm.Name, vm.VmId.ToString(), vm.Node, vm.Pool, vm.Notes, vm.ProxmoxNotes, vm.OsLabel }
+            .Concat(vm.ShownIps.Select(a => a.Ip))
+            .Any(f => f.Contains(q, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ── Grouping and sort ──────────────────────────────────────────────────
+    private void ApplySortAndGrouping()
+    {
+        if (_vmView is not ListCollectionView view) return;
+        var grouped = _config.GroupByNode;
+        // Regrouping rebuilds the rows and drops the selection; put it back after
+        var keep = GetSelectedVms();
+        using (view.DeferRefresh())
+        {
+            view.GroupDescriptions.Clear();
+            if (grouped)
+                view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(VmDisplayItem.Node)));
+            view.CustomSort = new VmComparer(_config.VmSort, _config.VmSortDesc, grouped);
+            // IPs arrive after the list and notes change in place: keep their order current
+            view.IsLiveSorting = true;
+            view.LiveSortingProperties.Clear();
+            view.LiveSortingProperties.Add(nameof(VmDisplayItem.IpAddress));
+            view.LiveSortingProperties.Add(nameof(VmDisplayItem.NotesColumn));
+        }
+        VmDisplayItem.ShowNode = !grouped;
+        foreach (var vm in _vmItems) vm.RefreshDetail();
+        SortText.Text = $"Sort: {VmComparer.Labels[_config.VmSort]} {(_config.VmSortDesc ? "▼" : "▲")}";
+        Dispatcher.BeginInvoke(FitChips, System.Windows.Threading.DispatcherPriority.Loaded);
+        // Every heading carries a sort mark so it reads as clickable: ↕ dim, ▲/▼ on the sorted one
+        foreach (var heading in ColumnHeadings.Children.OfType<Button>())
+        {
+            var key = (string)heading.Tag;
+            var label = key == "snaps" ? "SNAPS" : VmComparer.Labels[key].ToUpperInvariant();
+            var sorted = key == _config.VmSort;
+            heading.Content = $"{label}  {(sorted ? (_config.VmSortDesc ? "▼" : "▲") : "↕")}";
+            heading.SetResourceReference(ForegroundProperty, sorted ? "ThemeAccent" : "ThemeSubtext0");
+        }
+        foreach (var vm in keep.Where(IsShown))
+            if (!VmList.SelectedItems.Contains(vm)) VmList.SelectedItems.Add(vm);
+        if (VmList.SelectedItem != null) VmList.ScrollIntoView(VmList.SelectedItem);
+    }
+
+    // ── Narrow windows ─────────────────────────────────────────────────────
+    private const double SearchWidth = 210, MinSearchWidth = 140;
+
+    private void OnHeaderResized(object sender, SizeChangedEventArgs e)
+    {
+        if (e.WidthChanged) FitHeader();
+    }
+
+    // The search box gives up width (down to 140), then Refresh its label, before
+    // the title does; a title that still doesn't fit is trimmed with an ellipsis.
+    private void FitHeader()
+    {
+        if (HeaderPanel.ActualWidth <= 0) return;
+        ClusterTitle.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var title = ClusterTitle.DesiredSize.Width;
+        RefreshLabel.Visibility = Visibility.Visible;
+        HeaderTools.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var other = HeaderTools.DesiredSize.Width - SearchBorder.Width;
+        var labelWidth = RefreshLabel.DesiredSize.Width + RefreshLabel.Margin.Left + RefreshLabel.Margin.Right;
+        var spare = HeaderPanel.ActualWidth - other - title - 16;
+        if (spare < MinSearchWidth)
+        {
+            RefreshLabel.Visibility = Visibility.Collapsed;
+            spare += labelWidth;
+        }
+        SearchBorder.Width = Math.Clamp(spare, MinSearchWidth, SearchWidth);
+    }
+
+    private void OnChipRowResized(object sender, SizeChangedEventArgs e)
+    {
+        if (e.WidthChanged) FitChips();
+    }
+
+    // Filters on the left, view options on the right; the options move to a
+    // second row when both don't fit
+    private void FitChips()
+    {
+        if (ChipRow.ActualWidth <= 0) return;
+        var infinite = new Size(double.PositiveInfinity, double.PositiveInfinity);
+        Filters.Measure(infinite);
+        ViewOptions.Measure(infinite);
+        var wrap = Filters.DesiredSize.Width + ViewOptions.DesiredSize.Width + 12 > ChipRow.ActualWidth;
+        DockPanel.SetDock(ViewOptions, wrap ? Dock.Bottom : Dock.Right);
+        ViewOptions.HorizontalAlignment = wrap ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+        ViewOptions.Margin = new Thickness(0, wrap ? 6 : 0, 0, 0);
+    }
+
+    // ── Columns ────────────────────────────────────────────────────────────
+    // Row parts besides name, address, notes and snapshots: OS badge, status,
+    // button, the row's padding and room for the scrollbar
+    private const double FixedRowWidth = 42 + 86 + 98 + 20 + 8 + 18;
+    private const double SnapsWidth = 62, MinAddressWidth = 118, MinNameWidth = 120, MinNotesWidth = 60;
+
+    private void OnVmListResized(object sender, SizeChangedEventArgs e)
+    {
+        if (e.WidthChanged) UpdateColumns();
+    }
+
+    // Too narrow for every column: notes go first, then snapshots, then the
+    // address, as on Linux. A wider window shows more of each VM's addresses,
+    // up to all of them. Every row shares the widths, so the columns line up.
+    private void UpdateColumns()
+    {
+        bool notes = true, snaps = true, address = true;
+        double Need() => FixedRowWidth + MinNameWidth + (snaps ? SnapsWidth : 0)
+            + (address ? MinAddressWidth : 0) + (notes ? MinNotesWidth : 0);
+        var width = VmList.ActualWidth;
+        if (Need() > width) notes = false;
+        if (Need() > width) snaps = false;
+        if (Need() > width) address = false;
+
+        Resources["NotesColumnWidth"] = notes ? new GridLength(2, GridUnitType.Star) : new GridLength(0);
+        Resources["NotesMinWidth"] = notes ? MinNotesWidth : 0.0;
+        Resources["NotesVisibility"] = notes ? Visibility.Visible : Visibility.Collapsed;
+        Resources["SnapsColumnWidth"] = new GridLength(snaps ? SnapsWidth : 0);
+        Resources["SnapsVisibility"] = snaps ? Visibility.Visible : Visibility.Collapsed;
+        Resources["AddressVisibility"] = address ? Visibility.Visible : Visibility.Collapsed;
+        if (!address)
+        {
+            Resources["AddressColumnWidth"] = new GridLength(0);
+            return;
+        }
+
+        var typeface = new Typeface((FontFamily)FindResource("Mono"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+        var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var needed = _vmItems.Select(vm => new FormattedText(string.Join(", ", vm.AddressParts),
+                System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, 12,
+                Brushes.Black, pixelsPerDip).WidthIncludingTrailingWhitespace)
+            .DefaultIfEmpty(0).Max() + 26;
+        var free = width - Need();
+        var extra = Math.Max(0, Math.Min(needed - MinAddressWidth, free * 0.5));
+        Resources["AddressColumnWidth"] = new GridLength(MinAddressWidth + extra);
+    }
+
+    // Inspector: each adapter's name, dimmed, over its addresses
+    private void ShowAddresses(VmDisplayItem vm)
+    {
+        DetailAddresses.Children.Clear();
+        TextBlock Line(string text, bool address)
+        {
+            var tb = new TextBlock { Text = text, FontSize = address ? 12 : 11 };
+            if (address) tb.FontFamily = (FontFamily)FindResource("Mono");
+            tb.SetResourceReference(TextBlock.ForegroundProperty, address ? "ThemeText" : "ThemeSubtext0");
+            return tb;
+        }
+        var groups = vm.ShownIps.GroupBy(a => a.Adapter.Length > 0 ? a.Adapter : "Adapter").ToList();
+        if (groups.Count == 0)
+        {
+            var reason = Line(vm.AddressParts[0], false);
+            reason.FontSize = 12;
+            reason.SetResourceReference(TextBlock.ForegroundProperty, "ThemeText");
+            DetailAddresses.Children.Add(reason);
+        }
+        foreach (var (group, i) in groups.Select((g, i) => (g, i)))
+        {
+            var name = Line(group.Key, false);
+            name.Margin = new Thickness(0, i > 0 ? 6 : 0, 0, 1);
+            DetailAddresses.Children.Add(name);
+            foreach (var a in group) DetailAddresses.Children.Add(Line(a.Ip, true));
+        }
+    }
+
+    // A VM inside a folded node is off screen, so keys shouldn't act on it
+    private bool IsShown(VmDisplayItem vm) => !_config.GroupByNode || !_collapsedNodes.Contains(vm.Node);
+
+    // Regrouping rebuilds the headings: restore each one's folded state
+    private void OnNodeHeaderLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton { DataContext: CollectionViewGroup group } head)
+            head.IsChecked = !_collapsedNodes.Contains(group.Name?.ToString() ?? "");
+    }
+
+    private void OnNodeHeaderToggled(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton { DataContext: CollectionViewGroup group } head) return;
+        var node = group.Name?.ToString() ?? "";
+        if (head.IsChecked == true)
+        {
+            _collapsedNodes.Remove(node);
+            return;
+        }
+        if (!_collapsedNodes.Add(node)) return;
+        foreach (var vm in VmList.SelectedItems.OfType<VmDisplayItem>().Where(v => v.Node == node).ToList())
+            VmList.SelectedItems.Remove(vm);
+        if (VmList.SelectedItems.Count == 0 &&
+            _vmView?.OfType<VmDisplayItem>().FirstOrDefault(IsShown) is { } first)
+            VmList.SelectedItem = first;
+    }
+
+    private void OnGroupToggle(object sender, RoutedEventArgs e)
+    {
+        _config.GroupByNode = GroupToggle.IsChecked == true;
+        SaveConfig();
+        ApplySortAndGrouping();
+    }
+
+    private void OnHeadingClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string key }) SortBy(key);
+    }
+
+    private void OnSortMenu(object sender, RoutedEventArgs e)
+    {
+        // Picking the current key again reverses the order, like a column heading
+        var entries = VmComparer.Labels.Select(kv => (MenuEntry?)new MenuEntry(
+            kv.Key == _config.VmSort ? $"✓  {kv.Value}  {(_config.VmSortDesc ? "▼" : "▲")}" : $"     {kv.Value}",
+            () => SortBy(kv.Key)));
+        ShowMenu(SortBtn, PlacementMode.Bottom, entries);
+    }
+
+    private void SortBy(string key)
+    {
+        if (key == _config.VmSort)
+            _config.VmSortDesc = !_config.VmSortDesc;
+        else
+            (_config.VmSort, _config.VmSortDesc) = (key, false);
+        SaveConfig();
+        ApplySortAndGrouping();
+    }
+
+    private void OnFilterChanged(object sender, RoutedEventArgs e)
+    {
+        if (IsLoaded) UpdateListState();
+    }
+
+    private void OnSearchChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateSearchHint();
+        UpdateListState();
+    }
+
+    private void OnSearchFocus(object sender, KeyboardFocusChangedEventArgs e) => UpdateSearchHint();
+
+    private void UpdateSearchHint()
+    {
+        var empty = SearchBox.Text.Length == 0;
+        SearchHint.Visibility = empty && !SearchBox.IsKeyboardFocused ? Visibility.Visible : Visibility.Collapsed;
+        SearchKey.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ── Keyboard ───────────────────────────────────────────────────────────
+    private void OnWindowKeyDown(object sender, KeyEventArgs e)
+    {
+        var mods = Keyboard.Modifiers;
+        if (e.Key == Key.F5)
+        {
+            _ = RefreshVmsAsync();
+            e.Handled = true;
+            return;
+        }
+
+        if (Keyboard.FocusedElement is TextBox box)
+        {
+            if (box == SearchBox && e.Key is Key.Escape or Key.Enter or Key.Down)
+            {
+                if (e.Key == Key.Escape) SearchBox.Clear();
+                FocusList();
+                e.Handled = true;
+            }
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case Key.Oem2 or Key.Divide when mods == ModifierKeys.None:
+                SearchBox.Focus();
+                break;
+            case Key.Enter when mods == ModifierKeys.None:
+                _ = LaunchAsync(GetSelectedVms());
+                break;
+            case Key.S when mods == ModifierKeys.None:
+                OnStartVm(this, e);
+                break;
+            case Key.S when mods == ModifierKeys.Shift:
+                OnShutdownVm(this, e);
+                break;
+            case Key.R when mods == ModifierKeys.None:
+                OnRebootVm(this, e);
+                break;
+            case Key.P when mods == ModifierKeys.None:
+                OnSnapshots(this, e);
+                break;
+            case Key.OemPeriod when mods == ModifierKeys.Control:
+                OnForceStopVm(this, e);
+                break;
+            case Key.A when mods == ModifierKeys.Control:
+                // Only what's on screen, not the VMs inside folded nodes
+                VmList.SelectedItems.Clear();
+                foreach (var vm in _vmView?.OfType<VmDisplayItem>().Where(IsShown) ?? [])
+                    VmList.SelectedItems.Add(vm);
+                break;
+            default:
+                return;
+        }
+        e.Handled = true;
+    }
+
+    private void FocusList()
+    {
+        if (VmList.SelectedItem == null)
+            VmList.SelectedItem = _vmView?.OfType<VmDisplayItem>().FirstOrDefault(IsShown);
+        if (VmList.SelectedItem != null &&
+            VmList.ItemContainerGenerator.ContainerFromItem(VmList.SelectedItem) is ListBoxItem item)
+            item.Focus();
+        else
+            VmList.Focus();
+    }
+
+    // ── Selection and inspector ────────────────────────────────────────────
+    private List<VmDisplayItem> GetSelectedVms()
+    {
+        var selected = VmList.SelectedItems.OfType<VmDisplayItem>().ToHashSet();
+        // In list order, not click order
+        return (_vmView?.OfType<VmDisplayItem>() ?? _vmItems).Where(selected.Contains).ToList();
+    }
+
+    private void OnVmSelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateInspector();
+
+    private void UpdateInspector()
+    {
+        // Save an edit in progress to the VM it was typed for, before the panel moves on
+        CommitNote();
         var vms = GetSelectedVms();
+        InspectorEmpty.Visibility = vms.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        InspectorPanel.Visibility = vms.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (vms.Count == 0) return;
+
+        var running = vms.Count(v => v.IsRunning);
+        var single = vms.Count == 1 ? vms[0] : null;
+        InspectorDetails.Visibility = single != null ? Visibility.Visible : Visibility.Collapsed;
+        SnapshotsBtn.IsEnabled = single != null;
+        RollbackBtn.IsEnabled = single is { SnapCount: > 0 };
+        OpenConsoleBtn.IsEnabled = running > 0;
+
+        if (single != null)
+        {
+            InspectorCaption.Text = "Selected";
+            InspectorName.Text = single.Name;
+            InspectorOs.Text = single.OsLabel;
+            InspectorSep.Text = " · ";
+            InspectorState.Text = single.StatusText;
+            // A resource reference, so it follows theme changes
+            InspectorState.SetResourceReference(TextElement.ForegroundProperty, single.IsRunning ? "ThemeGreen" : "ThemeOverlay1");
+            OpenConsoleText.Text = "Open SPICE console";
+            DetailId.Text = single.VmId.ToString();
+            ShowAddresses(single);
+            var pveNotes = string.Join("\n", single.ProxmoxNoteLines.Take(4));
+            DetailPveNotes.Text = pveNotes;
+            DetailPveNotes.Visibility = DetailPveNotesLabel.Visibility =
+                pveNotes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            DetailNode.Text = single.Node;
+            DetailPool.Text = single.PoolOrDash;
+            NotesBox.Text = single.Notes;
+            NotesBox.Tag = single;
+        }
+        else
+        {
+            InspectorCaption.Text = "Selection";
+            InspectorName.Text = $"{vms.Count} VMs";
+            InspectorOs.Text = $"{running} running";
+            InspectorSep.Text = " · ";
+            InspectorState.Text = $"{vms.Count - running} stopped";
+            InspectorState.SetResourceReference(TextElement.ForegroundProperty, "ThemeSubtext0");
+            OpenConsoleText.Text = running == 1 ? "Open 1 console" : $"Open {running} consoles";
+            NotesBox.Tag = null;
+        }
+    }
+
+    private void OnVmDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        // Only a double-click on a row itself, not on its buttons or the empty space below
+        if (e.OriginalSource is not DependencyObject src ||
+            ItemsControl.ContainerFromElement(VmList, src) is not ListBoxItem { DataContext: VmDisplayItem vm } ||
+            FindParent<ButtonBase>(src) != null)
+            return;
+        _ = LaunchAsync([vm]);
+    }
+
+    private static T? FindParent<T>(DependencyObject child) where T : DependencyObject
+    {
+        for (var node = child; node != null; node = VisualTreeHelper.GetParent(node))
+            if (node is T t) return t;
+        return null;
+    }
+
+    private void OnRowConnect(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not VmDisplayItem vm) return;
+        VmList.SelectedItem = vm;
+        _ = LaunchAsync([vm]);
+    }
+
+    private void OnRowStart(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not VmDisplayItem vm) return;
+        VmList.SelectedItem = vm;
+        _ = VmActionAsync([vm], "start", null);
+    }
+
+    // ── VM Actions ─────────────────────────────────────────────────────────
+    // confirmMsg null: act without asking (starting a VM loses nothing)
+    private async Task VmActionAsync(List<VmDisplayItem> vms, string action, string? confirmMsg)
+    {
         if (vms.Count == 0)
         {
             MessageBox.Show("Select one or more VMs first.", "No Selection",
@@ -467,46 +1068,90 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (MessageBox.Show(confirmMsg, "Confirm", MessageBoxButton.YesNo,
+        if (confirmMsg != null && MessageBox.Show(confirmMsg, "Confirm", MessageBoxButton.YesNo,
             MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
+
+        // Start acts on stopped VMs, the others on running ones
+        var valid = vms.Where(v => action == "start" ? !v.IsRunning : v.IsRunning).ToList();
+        if (valid.Count == 0)
+        {
+            MessageBox.Show("All selected VMs are already in the target state.", "No Action",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
 
         if (_selectedClusterIdx < 0) return;
         var cluster = _config.Clusters[_selectedClusterIdx];
         var auth = await GetAuthAsync(cluster);
         if (auth == null) return;
 
-        foreach (var vm in vms)
+        var errors = new List<string>();
+        var started = new List<(VmDisplayItem Vm, JsonElement? Task)>();
+        foreach (var vm in valid)
         {
             var endpoint = $"/api2/json/nodes/{vm.Node}/qemu/{vm.VmId}/status/{action}";
-            await ProxmoxApi.RequestAsync(cluster.Host, endpoint, "POST", auth);
+            var result = await ProxmoxApi.RequestAsync(cluster.Host, endpoint, "POST", auth);
+            if (result == null)
+                errors.Add($"{vm.Name}: the request failed (see the debug log)");
+            else
+                started.Add((vm, result));
         }
 
-        StatusLabel.Text = $"{action} sent to {vms.Count} VM(s). Refreshing...";
-        await Task.Delay(3000);
+        // Refresh once Proxmox has finished, not after a guess
+        StatusLabel.Text = $"{action} sent to {Names(valid)}. Waiting for Proxmox...";
+        var outcomes = await Task.WhenAll(started.Select(async s =>
+            (s.Vm, Error: await ProxmoxApi.WaitForTaskAsync(cluster.Host, auth, s.Task))));
+        errors.AddRange(outcomes.Where(o => o.Error != null).Select(o => $"{o.Vm.Name}: {o.Error}"));
         await RefreshVmsAsync();
+        if (errors.Count > 0)
+        {
+            StatusLabel.Text = "Some actions failed";
+            MessageBox.Show(string.Join("\n", errors), "Errors", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
+    private static string Names(List<VmDisplayItem> vms) =>
+        vms.Count == 1 ? vms[0].Name : $"{vms.Count} VMs";
+
     private void OnStartVm(object sender, RoutedEventArgs e)
-        => _ = VmActionAsync("start", "Start selected VM(s)?");
+        => _ = VmActionAsync(GetSelectedVms(), "start", null);
 
     private void OnShutdownVm(object sender, RoutedEventArgs e)
-        => _ = VmActionAsync("shutdown", "Send ACPI shutdown to selected VM(s)?");
-
-    private void OnRebootVm(object sender, RoutedEventArgs e)
-        => _ = VmActionAsync("reboot", "Reboot selected VM(s)?");
-
-    private void OnForceStopVm(object sender, RoutedEventArgs e)
-        => _ = VmActionAsync("stop", "Force stop selected VM(s)?\nUnsaved data will be lost.");
-
-    // ── SPICE Launch ───────────────────────────────────────────────────────
-    private async void OnLaunchSpice(object sender, RoutedEventArgs e)
     {
         var vms = GetSelectedVms();
+        _ = VmActionAsync(vms, "shutdown", $"Send ACPI shutdown to {Names(vms)}?");
+    }
+
+    private void OnRebootVm(object sender, RoutedEventArgs e)
+    {
+        var vms = GetSelectedVms();
+        _ = VmActionAsync(vms, "reboot", $"Reboot {Names(vms)}?");
+    }
+
+    private void OnForceStopVm(object sender, RoutedEventArgs e)
+    {
+        var vms = GetSelectedVms();
+        _ = VmActionAsync(vms, "stop", $"Force stop {Names(vms)}?\nUnsaved data will be lost.");
+    }
+
+    // ── SPICE Launch ───────────────────────────────────────────────────────
+    private void OnLaunchSpice(object sender, RoutedEventArgs e) => _ = LaunchAsync(GetSelectedVms());
+
+    private async Task LaunchAsync(List<VmDisplayItem> vms)
+    {
         if (vms.Count == 0)
         {
             MessageBox.Show("Select a VM to launch.", "No Selection",
                 MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var running = vms.Where(v => v.IsRunning).ToList();
+        if (running.Count == 0)
+        {
+            StatusLabel.Text = vms.Count == 1
+                ? $"{vms[0].Name} is not running. Start it first (S)."
+                : "None of the selected VMs are running.";
             return;
         }
 
@@ -523,7 +1168,7 @@ public partial class MainWindow : Window
         var auth = await GetAuthAsync(cluster);
         if (auth == null) return;
 
-        foreach (var vm in vms.Where(v => v.IsRunning))
+        foreach (var vm in running)
         {
             StatusLabel.Text = $"Requesting SPICE proxy for {vm.Name}...";
 
@@ -542,44 +1187,18 @@ public partial class MainWindow : Window
             foreach (var prop in data.EnumerateObject())
             {
                 var key = prop.Name.Replace("_", "-");
-                var val = prop.Value.ValueKind == System.Text.Json.JsonValueKind.Number
+                var val = prop.Value.ValueKind == JsonValueKind.Number
                     ? prop.Value.GetRawText()
                     : prop.Value.GetString() ?? "";
                 vvContent += $"{key}={val}\n";
             }
             vvContent += "delete-this-file=1\n";
 
-            var vvPath = Path.Combine(Path.GetTempPath(), $"pve-spice-{vm.VmId}.vv");
-            await File.WriteAllTextAsync(vvPath, vvContent);
+            var vvPath = ViewerService.WriteVvFile(vvContent);
 
             ViewerService.LaunchSpice(viewer, vvPath);
             StatusLabel.Text = $"Launched SPICE session for {vm.Name}";
         }
-    }
-
-    private void OnNameDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ClickCount == 2 && sender is FrameworkElement fe &&
-            fe.DataContext is VmDisplayItem vm && vm.IsRunning)
-        {
-            OnLaunchSpice(sender, new RoutedEventArgs());
-        }
-    }
-
-    private void OnVmSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        var count = _vmItems.Count(v => v.IsChecked);
-        CheckCountLabel.Text = count > 0 ? $"{count} checked" : "";
-    }
-
-    private void OnSelectAllCheckBox(object sender, RoutedEventArgs e)
-    {
-        if (sender is not System.Windows.Controls.CheckBox cb) return;
-        bool check = cb.IsChecked == true;
-        foreach (var item in _vmView?.OfType<VmDisplayItem>() ?? [])
-            item.IsChecked = check;
-        var count = _vmItems.Count(v => v.IsChecked);
-        CheckCountLabel.Text = count > 0 ? $"{count} checked" : "";
     }
 
     // ── Snapshots ──────────────────────────────────────────────────────────
@@ -647,18 +1266,100 @@ public partial class MainWindow : Window
             "Confirm Rollback", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
 
-        await ProxmoxApi.RequestAsync(
+        StatusLabel.Text = $"Rolling back to '{snapName}'...";
+        var result = await ProxmoxApi.RequestAsync(
             cluster.Host,
             $"/api2/json/nodes/{vm.Node}/qemu/{vm.VmId}/snapshot/{Uri.EscapeDataString(snapName)}/rollback",
             "POST", auth);
+        var error = result == null ? "the request failed (see the debug log)"
+            : await ProxmoxApi.WaitForTaskAsync(cluster.Host, auth, result);
 
-        StatusLabel.Text = $"Rolled back to '{snapName}'";
-        await Task.Delay(3000);
         await RefreshVmsAsync();
+        StatusLabel.Text = error == null ? $"Rolled back to '{snapName}'" : "Rollback failed";
+        if (error != null)
+            MessageBox.Show(error, "Rollback Failed", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
+    // ── Settings menu ──────────────────────────────────────────────────────
+    private void OnOpenSettings(object sender, RoutedEventArgs e)
+    {
+        var hasCluster = _selectedClusterIdx >= 0 && _selectedClusterIdx < _config.Clusters.Count;
+        var clusterName = hasCluster ? _config.Clusters[_selectedClusterIdx].Name : "cluster";
+        ShowMenu(SettingsBtn, PlacementMode.Top,
+        [
+            new($"Edit {clusterName}…", EditCluster, hasCluster),
+            new($"Remove {clusterName}…", RemoveCluster, hasCluster),
+            null,
+            new("Import clusters…", ImportConfig),
+            new("Export clusters…", ExportConfig),
+            null,
+            new(DebugLogger.Enabled ? "Debug log: on" : "Debug log: off", ToggleDebugLog),
+            new("Open debug log", OpenLogFile, DebugLogger.Enabled),
+            new("Check prerequisites", CheckPrereqs),
+            new("Create Start Menu shortcut", CreateShortcut),
+        ]);
+    }
+
+    private const string RepoUrl = "https://github.com/darthrater78/proxmoxspicemanager";
+
+    private void OnOpenGitHub(object sender, RoutedEventArgs e) => OpenUrl(RepoUrl);
+
+    private void OnOpenReleaseNotes(object sender, RoutedEventArgs e) =>
+        OpenUrl($"{RepoUrl}/releases/tag/v{AppVersion}");
+
+    private record MenuEntry(string Label, Action Run, bool Enabled = true);
+
+    // A themed popup menu of flat buttons; null entries are separators
+    private void ShowMenu(UIElement target, PlacementMode placement, IEnumerable<MenuEntry?> entries)
+    {
+        var popup = new Popup
+        {
+            PlacementTarget = target,
+            Placement = placement,
+            StaysOpen = false,
+            AllowsTransparency = true,
+            PopupAnimation = PopupAnimation.Fade,
+        };
+        var panel = new StackPanel { MinWidth = 220 };
+        foreach (var entry in entries)
+        {
+            if (entry == null)
+            {
+                panel.Children.Add(new Border
+                {
+                    Height = 1,
+                    Margin = new Thickness(4, 5, 4, 5),
+                    Background = (Brush)FindResource("ThemeSurface1"),
+                });
+                continue;
+            }
+            var button = new Button
+            {
+                Style = (Style)FindResource("NavButton"),
+                Content = new TextBlock { Text = entry.Label },
+                IsEnabled = entry.Enabled,
+            };
+            button.Click += (_, _) =>
+            {
+                popup.IsOpen = false;
+                entry.Run();
+            };
+            panel.Children.Add(button);
+        }
+        popup.Child = new Border
+        {
+            Style = (Style)FindResource("PopupCard"),
+            Padding = new Thickness(6),
+            Child = panel,
+        };
+        popup.IsOpen = true;
+    }
+
+    private static void OpenUrl(string url)
+        => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+
     // ── Import / Export ────────────────────────────────────────────────────
-    private void OnImport(object sender, RoutedEventArgs e)
+    private void ImportConfig()
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
@@ -679,16 +1380,29 @@ public partial class MainWindow : Window
             }
 
             var existingNames = _config.Clusters.Select(c => c.Name).ToHashSet();
+            var needSecret = new List<string>();
             foreach (var cluster in imported.Clusters)
             {
                 if (existingNames.Contains(cluster.Name))
                     cluster.Name += " (Imported)";
+                // Encrypt the secret with DPAPI here; the plaintext never reaches connections.json
+                var secret = ConfigService.ImportedSecret(cluster);
+                cluster.TokenSecret = null;
+                cluster.TokenSecretEnc = null;
+                if (secret != null)
+                    ConfigService.SaveSecret(cluster, secret);
+                else if (cluster.AuthMethod == "token")
+                    needSecret.Add(cluster.Name);
                 _config.Clusters.Add(cluster);
             }
 
             SaveConfig();
             RefreshClusterList();
             StatusLabel.Text = $"Imported {imported.Clusters.Count} cluster(s)";
+            if (needSecret.Count > 0)
+                MessageBox.Show("The file has no usable token secret for:\n\n" + string.Join("\n", needSecret) +
+                    "\n\nEdit each of them and enter the secret again.", "Import",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex)
         {
@@ -697,7 +1411,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnExport(object sender, RoutedEventArgs e)
+    private void ExportConfig()
     {
         if (_config.Clusters.Count == 0)
         {
@@ -721,15 +1435,14 @@ public partial class MainWindow : Window
 
         try
         {
-            var export = new AppConfig { Clusters = [] };
+            // The format both apps read: the secret in plaintext as token_secret, no DPAPI blob
+            var export = new AppConfig { Version = AppVersion, Clusters = [] };
             foreach (var cluster in _config.Clusters)
             {
                 var copy = JsonSerializer.Deserialize<ClusterConfig>(
                     JsonSerializer.Serialize(cluster))!;
-                // Decrypt for export
-                var secret = ConfigService.GetSecret(cluster);
-                if (secret != null)
-                    copy.TokenSecretEnc = secret; // plaintext in export
+                copy.TokenSecretEnc = null;
+                copy.TokenSecret = ConfigService.GetSecret(cluster);
                 export.Clusters.Add(copy);
             }
 
@@ -745,46 +1458,43 @@ public partial class MainWindow : Window
     }
 
     // ── Debug Logging ─────────────────────────────────────────────────────
-    private void UpdateDebugLogUi()
+    private void OnIpv6Toggle(object sender, RoutedEventArgs e) => ToggleIpv6();
+
+    private void ToggleIpv6()
     {
-        bool on = DebugLogger.Enabled;
-        DebugLogToggle.Content = on ? "Debug Log: ON" : "Debug Log: OFF";
-        DebugLogToggle.Foreground = on
-            ? (System.Windows.Media.Brush)FindResource("ThemeGreen")
-            : (System.Windows.Media.Brush)FindResource("ThemeSubtext0");
-        OpenLogBtn.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        _config.ShowIpv6 = !_config.ShowIpv6;
+        Ipv6Toggle.IsChecked = _config.ShowIpv6;
+        VmDisplayItem.ShowIpv6 = _config.ShowIpv6;
+        SaveConfig();
+        foreach (var vm in _vmItems) vm.RefreshAddress();
+        UpdateColumns();
+        UpdateListState();
+        ApplySortAndGrouping();
+        UpdateInspector();
     }
 
-    private void OnToggleDebugLog(object sender, RoutedEventArgs e)
+    private void ToggleDebugLog()
     {
         bool newState = !DebugLogger.Enabled;
         DebugLogger.SetEnabled(newState);
         _config.DebugLogging = newState;
         SaveConfig();
-        UpdateDebugLogUi();
         StatusLabel.Text = newState
             ? $"Debug logging enabled — {DebugLogger.LogFilePath}"
             : "Debug logging disabled";
     }
 
-    private void OnOpenLogFile(object sender, RoutedEventArgs e)
+    private void OpenLogFile()
     {
         var path = DebugLogger.LogFilePath;
-        if (System.IO.File.Exists(path))
+        if (File.Exists(path))
             Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         else
             MessageBox.Show("No log file found yet. Trigger a refresh to generate log entries.",
                 "No Log", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    // ── Header buttons ─────────────────────────────────────────────────────
-    private void OnGitHubClick(object sender, RoutedEventArgs e)
-        => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager") { UseShellExecute = true });
-
-    private void OnReleaseNotesClick(object sender, RoutedEventArgs e)
-        => Process.Start(new ProcessStartInfo("https://github.com/darthrater78/proxmoxspicemanager/releases/latest") { UseShellExecute = true });
-
-    private void OnCheckPrereqs(object sender, RoutedEventArgs e)
+    private void CheckPrereqs()
     {
         var viewer = ViewerService.FindRemoteViewer();
         if (viewer != null)
@@ -836,61 +1546,51 @@ public partial class MainWindow : Window
         SaveConfig();
     }
 
-    private void OnNotesComboLoaded(object sender, RoutedEventArgs e)
+    private void OnNotesBoxCommit(object sender, KeyboardFocusChangedEventArgs e) => CommitNote();
+
+    private void OnNotesBoxKey(object sender, KeyEventArgs e)
     {
-        if (sender is ComboBox combo)
+        if (e.Key == Key.Enter)
         {
-            combo.ItemsSource = _config.NoteOptions ?? [];
-            combo.IsDropDownOpen = true;
-            combo.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, () =>
-            {
-                var bg = (Brush)FindResource("ThemeSurface0");
-                var fg = (Brush)FindResource("ThemeText");
-                ThemeComboBoxVisualTree(combo, bg, fg);
-            });
+            CommitNote();
+            FocusList();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            if (NotesBox.Tag is VmDisplayItem vm) NotesBox.Text = vm.Notes;
+            FocusList();
+            e.Handled = true;
         }
     }
 
-    private static void ThemeComboBoxVisualTree(DependencyObject parent,
-        Brush bg, Brush fg)
+    private void CommitNote()
     {
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-        {
-            var child = VisualTreeHelper.GetChild(parent, i);
-            if (child is System.Windows.Controls.TextBox tb)
-            {
-                tb.Background = bg;
-                tb.Foreground = fg;
-                tb.CaretBrush = fg;
-            }
-            else if (child is Border border)
-            {
-                if (border.Background is SolidColorBrush scb && IsLightColor(scb.Color))
-                    border.Background = bg;
-                if (border.BorderBrush is SolidColorBrush bscb && IsLightColor(bscb.Color))
-                    border.BorderBrush = bg;
-            }
-            ThemeComboBoxVisualTree(child, bg, fg);
-        }
+        if (NotesBox.Tag is not VmDisplayItem vm) return;
+        var text = NotesBox.Text.Trim();
+        if (vm.Notes == text) return;
+        vm.Notes = text;
+        SaveVmNote(vm);
     }
 
-    private static bool IsLightColor(Color c)
-        => c.R > 200 && c.G > 200 && c.B > 200;
-
-    private void OnNotesComboLostFocus(object sender, RoutedEventArgs e)
+    private void OnNotesMenu(object sender, RoutedEventArgs e)
     {
-        if (sender is ComboBox combo && combo.DataContext is VmDisplayItem vm)
-        {
-            var newText = combo.Text?.Trim() ?? "";
-            if (vm.Notes != newText)
-            {
-                vm.Notes = newText;
-                SaveVmNote(vm);
-            }
-        }
+        var entries = new List<MenuEntry?>();
+        foreach (var option in _config.NoteOptions ?? [])
+            entries.Add(new(option, () => SetNote(option)));
+        if (entries.Count > 0) entries.Add(null);
+        entries.Add(new("Clear note", () => SetNote(""), NotesBox.Text.Length > 0));
+        entries.Add(new("Edit saved notes…", ManageNotes));
+        ShowMenu(NotesMenuBtn, PlacementMode.Bottom, entries);
     }
 
-    private void OnManageNotes(object sender, RoutedEventArgs e)
+    private void SetNote(string text)
+    {
+        NotesBox.Text = text;
+        CommitNote();
+    }
+
+    private void ManageNotes()
     {
         _config.NoteOptions ??= [];
         var dlg = new Dialogs.ManageNotesDialog(_config.NoteOptions) { Owner = this };
@@ -901,285 +1601,7 @@ public partial class MainWindow : Window
         }
     }
 
-    // ── Column Filtering ──────────────────────────────────────────────────
-    private bool VmFilterPredicate(object obj)
-    {
-        if (obj is not VmDisplayItem vm) return false;
-        foreach (var kvp in _activeFilters)
-        {
-            var val = kvp.Value;
-            if (string.IsNullOrEmpty(val)) continue;
-
-            string field = kvp.Key.ToLowerInvariant() switch
-            {
-                "name" => vm.Name,
-                "node" => vm.Node,
-                "pool" => vm.Pool,
-                "status" => vm.Status,
-                "notes" => vm.Notes,
-                _ => ""
-            };
-
-            if (kvp.Key.Equals("name", StringComparison.OrdinalIgnoreCase))
-            {
-                // Substring search for name
-                if (!field.Contains(val, StringComparison.OrdinalIgnoreCase))
-                    return false;
-            }
-            else
-            {
-                // Exact match for other columns
-                if (!field.Equals(val, StringComparison.OrdinalIgnoreCase))
-                    return false;
-            }
-        }
-        return true;
-    }
-
-    private void OnColumnHeaderRightClick(object sender, MouseButtonEventArgs e)
-    {
-        if (e.OriginalSource is not FrameworkElement fe) return;
-
-        // Walk up to find the DataGridColumnHeader
-        var header = FindParent<DataGridColumnHeader>(fe);
-        if (header?.Column == null) return;
-
-        var colName = GetColumnFieldName(header.Column);
-        if (colName == null) return;
-
-        ShowFilterPopup(header, colName);
-    }
-
-    private static T? FindParent<T>(DependencyObject child) where T : DependencyObject
-    {
-        var parent = System.Windows.Media.VisualTreeHelper.GetParent(child);
-        while (parent != null)
-        {
-            if (parent is T t) return t;
-            parent = System.Windows.Media.VisualTreeHelper.GetParent(parent);
-        }
-        return null;
-    }
-
-    private string? GetColumnFieldName(DataGridColumn col)
-    {
-        if (col is DataGridBoundColumn bound && bound.Binding is Binding b)
-            return b.Path?.Path;
-        if (col is DataGridTemplateColumn tmpl)
-        {
-            var sort = tmpl.SortMemberPath;
-            if (!string.IsNullOrEmpty(sort)) return sort;
-        }
-        // Fallback: match by header text
-        var hdr = col.Header?.ToString()?.Trim() ?? "";
-        // Strip filter indicator
-        hdr = hdr.Replace(" \U0001f53d", "");
-        return hdr.ToLowerInvariant() switch
-        {
-            "name" => "Name",
-            "node" => "Node",
-            "pool" => "Pool",
-            "status" => "Status",
-            "notes" => "Notes",
-            _ => null
-        };
-    }
-
-    private void ShowFilterPopup(DataGridColumnHeader header, string colName)
-    {
-        var popup = new Popup
-        {
-            PlacementTarget = header,
-            Placement = PlacementMode.Bottom,
-            StaysOpen = false,
-            AllowsTransparency = true,
-        };
-
-        var border = new Border
-        {
-            Background = (Brush)FindResource("ThemeSurface0"),
-            BorderBrush = (Brush)FindResource("ThemeSurface2"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(10),
-            MinWidth = 180,
-        };
-
-        var panel = new StackPanel();
-
-        var title = new TextBlock
-        {
-            Text = $"Filter: {colName.ToUpper()}",
-            Foreground = (Brush)FindResource("ThemeSubtext0"),
-            FontSize = 11,
-            FontWeight = FontWeights.Bold,
-            Margin = new Thickness(0, 0, 0, 6),
-        };
-        panel.Children.Add(title);
-
-        if (colName.Equals("Name", StringComparison.OrdinalIgnoreCase))
-        {
-            // Text input for substring search
-            var textBox = new TextBox
-            {
-                Text = _activeFilters.GetValueOrDefault(colName, ""),
-                Background = (Brush)FindResource("ThemeSurface1"),
-                Foreground = (Brush)FindResource("ThemeText"),
-                CaretBrush = (Brush)FindResource("ThemeText"),
-                BorderThickness = new Thickness(1),
-                BorderBrush = (Brush)FindResource("ThemeSurface2"),
-                Padding = new Thickness(6, 4, 6, 4),
-                FontSize = 12,
-                MinWidth = 150,
-            };
-            panel.Children.Add(textBox);
-
-            var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
-
-            var applyBtn = new Button
-            {
-                Content = "Apply",
-                Padding = new Thickness(10, 4, 10, 4),
-                Background = (Brush)FindResource("ThemeBlue"),
-                Foreground = (Brush)FindResource("ThemeCrust"),
-                BorderThickness = new Thickness(0),
-                Cursor = Cursors.Hand,
-                Margin = new Thickness(0, 0, 6, 0),
-            };
-            applyBtn.Click += (_, _) =>
-            {
-                var val = textBox.Text.Trim();
-                if (string.IsNullOrEmpty(val))
-                    _activeFilters.Remove(colName);
-                else
-                    _activeFilters[colName] = val;
-                ApplyFilters();
-                UpdateColumnHeaders();
-                popup.IsOpen = false;
-            };
-            btnPanel.Children.Add(applyBtn);
-
-            var clearBtn = new Button
-            {
-                Content = "Clear",
-                Padding = new Thickness(10, 4, 10, 4),
-                Background = (Brush)FindResource("ThemeSurface1"),
-                Foreground = (Brush)FindResource("ThemeText"),
-                BorderThickness = new Thickness(0),
-                Cursor = Cursors.Hand,
-            };
-            clearBtn.Click += (_, _) =>
-            {
-                _activeFilters.Remove(colName);
-                ApplyFilters();
-                UpdateColumnHeaders();
-                popup.IsOpen = false;
-            };
-            btnPanel.Children.Add(clearBtn);
-
-            panel.Children.Add(btnPanel);
-        }
-        else
-        {
-            // ComboBox with distinct values
-            var distinctValues = _vmItems
-                .Select(vm => colName switch
-                {
-                    "Node" => vm.Node,
-                    "Pool" => vm.Pool,
-                    "Status" => vm.Status,
-                    "Notes" => vm.Notes,
-                    _ => ""
-                })
-                .Where(v => !string.IsNullOrEmpty(v))
-                .Distinct()
-                .OrderBy(v => v)
-                .ToList();
-
-            distinctValues.Insert(0, "All");
-
-            var combo = new ComboBox
-            {
-                ItemsSource = distinctValues,
-                SelectedItem = _activeFilters.ContainsKey(colName) ? _activeFilters[colName] : "All",
-                Background = (Brush)FindResource("ThemeSurface1"),
-                Foreground = (Brush)FindResource("ThemeText"),
-                BorderThickness = new Thickness(1),
-                BorderBrush = (Brush)FindResource("ThemeSurface2"),
-                FontSize = 12,
-                MinWidth = 150,
-            };
-            combo.SelectionChanged += (_, _) =>
-            {
-                if (combo.SelectedItem is string val)
-                {
-                    if (val == "All")
-                        _activeFilters.Remove(colName);
-                    else
-                        _activeFilters[colName] = val;
-                    ApplyFilters();
-                    UpdateColumnHeaders();
-                    popup.IsOpen = false;
-                }
-            };
-            panel.Children.Add(combo);
-
-            var clearBtn = new Button
-            {
-                Content = "Clear",
-                Padding = new Thickness(10, 4, 10, 4),
-                Background = (Brush)FindResource("ThemeSurface1"),
-                Foreground = (Brush)FindResource("ThemeText"),
-                BorderThickness = new Thickness(0),
-                Cursor = Cursors.Hand,
-                Margin = new Thickness(0, 8, 0, 0),
-            };
-            clearBtn.Click += (_, _) =>
-            {
-                _activeFilters.Remove(colName);
-                ApplyFilters();
-                UpdateColumnHeaders();
-                popup.IsOpen = false;
-            };
-            panel.Children.Add(clearBtn);
-        }
-
-        border.Child = panel;
-        popup.Child = border;
-        popup.IsOpen = true;
-    }
-
-    private void ApplyFilters()
-    {
-        _vmView?.Refresh();
-        ClearAllFiltersBtn.Visibility = _activeFilters.Count > 0
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-    }
-
-    private void UpdateColumnHeaders()
-    {
-        foreach (var col in VmGrid.Columns)
-        {
-            var fieldName = GetColumnFieldName(col);
-            if (fieldName == null) continue;
-
-            var baseName = fieldName.ToUpperInvariant();
-            if (_activeFilters.ContainsKey(fieldName))
-                col.Header = $"{baseName} \U0001f53d";
-            else
-                col.Header = baseName;
-        }
-    }
-
-    private void OnClearAllFilters(object sender, RoutedEventArgs e)
-    {
-        _activeFilters.Clear();
-        ApplyFilters();
-        UpdateColumnHeaders();
-    }
-
-    private void OnCreateShortcut(object sender, RoutedEventArgs e)
+    private void CreateShortcut()
     {
         try
         {
@@ -1204,7 +1626,8 @@ $s.Save()";
             var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(psScript));
             Process.Start(new ProcessStartInfo
             {
-                FileName = "powershell",
+                FileName = Path.Combine(Environment.SystemDirectory,
+                    "WindowsPowerShell", "v1.0", "powershell.exe"),
                 Arguments = $"-EncodedCommand {encoded}",
                 CreateNoWindow = true,
                 UseShellExecute = false,

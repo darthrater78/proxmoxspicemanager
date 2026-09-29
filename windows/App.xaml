@@ -24,5 +24,7 @@
         <SolidColorBrush x:Key="ThemeRed" Color="#f38ba8"/>
         <SolidColorBrush x:Key="ThemeMauve" Color="#cba6f7"/>
         <SolidColorBrush x:Key="ThemeLavender" Color="#b4befe"/>
+        <SolidColorBrush x:Key="ThemeAccent" Color="#fab387"/>
+        <SolidColorBrush x:Key="ThemeOnAccent" Color="#1a1a1a"/>
     </Application.Resources>
 </Application>

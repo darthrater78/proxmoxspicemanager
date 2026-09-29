@@ -1,145 +1,116 @@
 # Proxmox SPICE Connection Manager
 
-A desktop GUI application for managing and launching SPICE console sessions to Proxmox VE virtual machines. No browser required.
+Open SPICE consoles to your Proxmox VE virtual machines from a desktop app, without the browser.
 
-- **Windows** — native WPF app (C#/.NET 8), single-file exe with zero dependencies
-- **Linux** — Python + tkinter
+Proxmox's default noVNC console runs in a browser tab. SPICE opens the VM in a native window instead: smoother for everyday desktop use, with a shared clipboard, a display that resizes with the window, sound, USB redirection and multiple monitors. It's meant for VMs running a desktop operating system; use SSH for headless servers. See [SPICE or noVNC?](proxmox-setup.md#spice-or-novnc)
 
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+**Current version: 3.0.0** · [GitHub](https://github.com/darthrater78/proxmoxspicemanager) · [Release notes](https://github.com/darthrater78/proxmoxspicemanager/releases/tag/v3.0.0) · [Changelog](CHANGELOG.md)
+
+![The Windows app: clusters on the left, the VMs of the selected cluster grouped by node, and the selected VM's details and actions on the right](docs/screenshots/windows-main.png)
+
+## Getting started
+
+1. **Set up Proxmox:** a user and role, an API token or a username and password, and SPICE as your VMs' display → [proxmox-setup.md](proxmox-setup.md)
+2. **Install the SPICE client** (`remote-viewer`, from virt-viewer):
+   - Windows: the virt-viewer MSI from [spice-space.org](https://www.spice-space.org/download.html)
+   - Fedora: `sudo dnf install python3-tkinter python3-keyring virt-viewer`
+   - Debian/Ubuntu: `sudo apt install python3-tk python3-keyring virt-viewer`
+3. **Download the app** from [Releases](../../releases/latest):
+   - Windows: `Proxmox-SPICE-Manager.exe`, a single file with nothing else to install
+   - Linux: `proxmox-spice-manager.py` → walkthrough in [linux-setup.md](linux-setup.md)
+
+Both apps share one version, and every release carries both files.
+
 ## Features
 
-- **Multi-cluster management** — connect to multiple Proxmox clusters with saved credentials
-- **Auto-discovery** — automatically detects SPICE-enabled VMs across all cluster nodes
-- **Live IP address** — shows each running VM's IP via QEMU guest agent (requires `VM.GuestAgent.Audit` permission)
-- **One-click SPICE launch** — opens `remote-viewer` sessions with a double-click
-- **VM power controls** — Start, ACPI Shutdown, and Force Stop with multi-select support
-- **Snapshot management** — create, rollback, and delete snapshots with a full dialog, plus quick-rollback to the latest snapshot
-- **Secure credential storage** — Linux: OS keyring (GNOME Keyring, KDE Wallet, etc.); Windows: DPAPI encryption tied to your Windows user account
-- **5 built-in themes** — Catppuccin Mocha, Catppuccin Latte, Nord, Dracula, OLED Dark
-- **Column filtering & sorting** — inline filters above the VM table, click headings to sort, drag headings to reorder
-- **Import / Export** — share cluster configurations between machines (with plaintext secret warning on export)
-- **App menu integration** — install as a desktop app (Linux: `.desktop` file; Windows: Start Menu shortcut)
-- **Prerequisite checker** — first-run dialog detects missing dependencies and helps you install them
-- **Debug logging** — optional timestamped log file for diagnosing API connectivity issues (toggle in header bar; Linux: `~/.config/proxmox-spice/debug.log`, Windows: `%APPDATA%\proxmox-spice\debug.log`)
+- **Several clusters**, each logging in with an API token (stored securely) or a username and password (asked for, never saved)
+- **Every SPICE-enabled VM** across a cluster's nodes, grouped by node or in one flat list; search, filter to running or stopped, and sort by any column
+- **One-click consoles** from a VM's Connect button, a double-click or Enter
+- **Guest addresses** per network adapter from the QEMU guest agent, with an IPv6 toggle
+- **Power and snapshots:** start, shut down, reboot, force stop, and create, roll back or delete snapshots; select several VMs with Ctrl- or Shift-click to act on them together. The list refreshes as soon as Proxmox finishes the task
+- **Keyboard shortcuts:** Enter opens the console, S starts, Shift+S shuts down, R reboots, P opens snapshots, Ctrl+. force stops, / searches, F5 refreshes
+- **Notes** of your own per VM, alongside the VM's notes from Proxmox
+- **Five themes and seven accent colours**
+- **Import and export** of clusters, between machines and between the two apps
+- **App menu entries:** the app itself (Linux `.desktop` file, Windows Start Menu), and on Linux one entry per VM that opens its console directly (`--connect "<cluster>" <vmid>`)
 
-## Requirements
+## Screenshots
 
-### Windows (WPF app)
+The Linux app has the same layout:
 
-| Dependency | How to install |
-|---|---|
-| virt-viewer | [spice-space.org/download.html](https://www.spice-space.org/download.html) — install the Windows MSI |
+![The Linux app's main window](docs/screenshots/linux-main.png)
 
-The WPF app is a self-contained single-file exe — no Python, no .NET runtime install needed.
+Several VMs selected, with the actions panel acting on all of them:
 
-### Linux
+![Three VMs selected, with the actions panel acting on all of them](docs/screenshots/multi-select.png)
 
-| Dependency | Fedora | Debian/Ubuntu |
-|---|---|---|
-| tkinter | `python3-tkinter` | `python3-tk` |
-| keyring | `python3-keyring` | `python3-keyring` |
-| virt-viewer | `virt-viewer` | `virt-viewer` |
+One flat list, sorted by address:
 
-**Fedora (one-liner):**
+![The VM list ungrouped and sorted by IP address](docs/screenshots/flat-list.png)
+
+The five themes, and the Appearance flyout next to Settings:
+
+![The main window in Catppuccin Mocha, Catppuccin Latte, Nord, Dracula and OLED Dark, and the Appearance flyout](docs/screenshots/themes.png)
+
+The Settings menu: clusters, import and export, the debug log, prerequisites and app menu entries:
+
+![The Linux Settings menu open](docs/screenshots/linux-settings.png)
+
+Screenshots use mock clusters; [`tools/screenshots/`](tools/screenshots/README.md) renders them.
+
+## Security
+
+- **Token secrets** are kept in the OS keyring on Linux (GNOME Keyring, KDE Wallet, …), and encrypted with DPAPI on Windows, which only your Windows account can decrypt. Neither app writes a secret to its config file in plain text.
+- **Passwords** are never saved. The app asks when it connects, keeps Proxmox's login ticket in memory, and renews it every hour.
+- **Certificates:** one signed by a CA your system trusts just works. Proxmox's self-signed certificate is shown with its SHA-256 fingerprint the first time; compare it with Node → System → Certificates in Proxmox, confirm, and the app pins it for that cluster, like an SSH host key. A different certificate later brings up a warning before anything is sent. Plain `http://` hosts are refused.
+- **Export files** contain secrets in plain text. Keep them safe and delete them once imported.
+
+### Verifying a download
+
+Releases are built by GitHub Actions from the tagged commit. Check a download against `SHA256SUMS`, or its build provenance with the [GitHub CLI](https://cli.github.com/):
 
 ```bash
-sudo dnf install python3-tkinter python3-keyring virt-viewer
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify Proxmox-SPICE-Manager.exe -R darthrater78/proxmoxspicemanager
+gh attestation verify proxmox-spice-manager.py -R darthrater78/proxmoxspicemanager
 ```
-
-**Debian/Ubuntu (one-liner):**
-
-```bash
-sudo apt install python3-tk python3-keyring virt-viewer
-```
-
-## Getting Started
-
-> [!IMPORTANT]
-> **Step 1 — Configure Proxmox first:** create a user, role, API token, and set up your VMs → [proxmox-setup.md](proxmox-setup.md)
->
-> **Then install the app for your platform:**
-> - **Windows** — download `Proxmox-SPICE-Manager.exe` from [Releases](../../releases/latest)
-> - **Linux** — run `proxmox-spice-manager.py` (Fedora/Debian walkthrough with screenshots) → [linux-setup.md](linux-setup.md)
 
 ## Configuration
 
-### Config file locations
+| | Linux | Windows |
+|---|---|---|
+| Config | `~/.config/proxmox-spice/connections.json` | `%APPDATA%\proxmox-spice\connections.json` |
+| Debug log (Settings → Debug log) | `~/.config/proxmox-spice/debug.log` | `%APPDATA%\proxmox-spice\debug.log` |
 
-| Platform | Path |
-|---|---|
-| Linux | `~/.config/proxmox-spice/connections.json` |
-| Windows | `%APPDATA%\proxmox-spice\connections.json` |
-
-The config file stores cluster definitions, theme preference, column order, and (on Windows) DPAPI-encrypted token secrets. On Linux, secrets are stored separately in the OS keyring.
-
-### Import / Export
-
-Use the sidebar Import/Export buttons to transfer cluster configurations between machines:
-
-- **Export** decrypts secrets and writes them as plaintext JSON — treat the exported file as sensitive
-- **Import** re-encrypts secrets with the local machine's credentials and handles name collisions by appending "(Imported)"
-
-## Security Notes
-
-- **Linux:** Token secrets are stored in your desktop environment's keyring (GNOME Keyring, KDE Wallet, etc.) via the `keyring` Python package. They are never written to the JSON config file.
-- **Windows:** Token secrets are encrypted using Windows DPAPI (`CryptProtectData`), which ties the encryption key to your Windows user account. The encrypted blobs are stored as base64 in `connections.json`. They cannot be decrypted by another user or on another machine.
-- **SSL:** TLS certificate verification can be skipped per-cluster via the "Skip TLS verification" option (for self-signed certs, common in Proxmox). All communication still uses HTTPS.
-- **Export files** contain plaintext secrets — handle them accordingly.
-
-## Tips
-
-- **Clipboard sharing** requires `spice-vdagent` running inside the guest VM with a graphical session (not a raw TTY). For CLI-only VMs, use SSH for copy/paste.
-- **ACPI Shutdown** sends a graceful shutdown signal — the guest OS must handle ACPI events. **Force Stop** kills the QEMU process immediately (unsaved data will be lost).
-- **Polling** — after power or snapshot actions, the app polls every 10 seconds (up to 2 minutes) for state changes, then refreshes the VM list.
+The config holds your clusters, theme, accent and VM notes. **Import** renames a cluster whose name is taken ("(Imported)") and stores its secret securely. A file exported from either app imports into the other. A Windows *config* file, as opposed to an export, holds DPAPI-encrypted secrets that only open for that Windows user; importing it elsewhere asks for those secrets again.
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---|---|
-| No VMs appear after connecting | Verify your API token has `VM.Audit` permission and that VMs use QXL display. Enable Debug Log in the header bar and check the log file for details (Linux: `~/.config/proxmox-spice/debug.log`, Windows: `%APPDATA%\proxmox-spice\debug.log`) |
-| IP column shows "no agent" | The VM does not have `agent: 1` enabled in its Proxmox config — this is expected |
-| IP column shows "agent error" | The QEMU guest agent is enabled but not responding — check that `qemu-guest-agent` is installed and running inside the VM |
-| "Token secret not found" error | Re-edit the cluster and re-enter the token secret |
-| SPICE window opens but is black | Install `spice-vdagent` and a QXL driver inside the guest VM |
-| remote-viewer not found (Windows) | Install virt-viewer from [spice-space.org](https://www.spice-space.org/download.html) and restart the app |
-| Clipboard not working | Ensure `spice-vdagent` is running in a graphical session, not a TTY |
+| No VMs appear | Check the user has `VM.Audit` and the VMs' display is SPICE. Turn on the debug log (Settings) and look at the log file |
+| Address shows "no agent" | The VM doesn't have the QEMU guest agent enabled in Proxmox (Options → QEMU Guest Agent) |
+| Address shows "agent error" | The agent is enabled but not answering: install and start `qemu-guest-agent` inside the VM. Addresses also need the `VM.GuestAgent.Audit` permission |
+| "Token secret not found" | Edit the cluster and enter the token secret again |
+| Console opens black, or no shared clipboard | Install the guest tools inside the VM: `virtio-win-guest-tools.exe` from the VirtIO ISO on Windows, `spice-vdagent` on Linux (it needs a graphical session). See [proxmox-setup.md](proxmox-setup.md#change-the-display) |
+| remote-viewer not found | Install virt-viewer (Getting started, step 2) and restart the app |
 
-## Project Structure
+**Shut down** asks the guest OS to shut down (it must handle ACPI). **Force stop** ends the VM at once, like pulling the plug.
 
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+bash scripts/check.sh    # version agreement, changelog entry, Python lint, shellcheck
+bash scripts/build.sh    # Windows exe into dist/ (needs the .NET 8 SDK; works on Linux too)
 ```
-windows/                        # Native WPF Windows app (C#/.NET 8)
-proxmox-spice-manager.py        # Linux edition (standalone, single file)
-README.md                       # This file
-proxmox-setup.md                # Proxmox server config and app setup (all platforms)
-linux-setup.md                  # Linux installation walkthrough with screenshots
-```
 
-The Linux script is a standalone single-file Python app. The WPF app in `windows/` is a standalone C#/.NET 8 project. Both have full feature parity.
+- `windows/`: the Windows app (C#, WPF, .NET 8)
+- `proxmox-spice-manager.py`: the Linux app, one standalone file (Python, tkinter)
+- `scripts/`: the checks and build, used by CI and locally
+- `tools/screenshots/`: renders both apps with mock data
 
-## Version History
-
-### Windows (WPF)
-
-- **1.2.1** — Improve SPICE launch speed: reuse HTTP connections across API calls (eliminates per-request TLS handshake), cache remote-viewer path after first lookup
-- **1.2.0** — Add debug logging toggle, resilient VM refresh (guest-agent failures no longer block or crash the app), IP column shows "no agent"/"agent error" status, log rotation (5 MB cap)
-- **1.1.2** — Fix selected row text turning blue for stopped VMs (preserve running/stopped color when selected)
-- **1.1.1** — Fix notes ComboBox theming (dark background for edit field, dropdown, and selected item), adjust column widths for IP column fit
-- **1.1.0** — Add live VM IP address column (via QEMU guest agent), running/stopped row color differentiation, release notes link uses /releases/latest
-- **1.0.0** — Native WPF Windows app (C#/.NET 8): full feature parity with Python version, notes editing with dropdown, column filtering, parallel API refresh, single-instance guard
-
-### Linux (Python)
-
-- **2.3.0** — Add debug logging toggle with rotating log file (5 MB cap), fix VM notes collision across clusters (notes now scoped by cluster name), add single-instance guard to prevent duplicate launches
-- **2.2.4** — Fix selected row text turning blue for stopped VMs (preserve running/stopped color when selected)
-- **2.2.3** — Extract shared base module, fix PowerShell injection in shortcut creation
-- **2.2.2** — Add GitHub and Release Notes links in header
-- **2.2.1** — Filter UI redesign, power action UX, security hardening
-- **2.2.0** — Bulk select, reboot, notes column, security hardening
-- **2.1.4** — App icon update
-- **2.1.3** — App icon — SPICE text with S monogram for small sizes
-- **2.1.1** — Bug fixes: secret migration safety, API error normalization, sort persistence, auth passed to polling methods
-- **2.1.0** — Rewrote to pure `urllib` (removed curl/jq deps), added column filters, snapshot indicators, pool column, import/export
-- **2.0.0** — Full GUI rewrite with multi-cluster support, themes, snapshot management, keyring integration
-- **1.0.0** — Initial shell script wrapper for `remote-viewer`
+Both apps are kept alike in look and behaviour. The version is declared in `windows/ProxmoxSpiceManager.csproj` and in `APP_VERSION` plus the docstring of `proxmox-spice-manager.py`, and `scripts/version.sh` fails if they disagree. To release, merge a version bump with its `CHANGELOG.md` entry, then push a `vX.Y.Z` tag on `main`. A `vX.Y.Z-dev.N` tag on a branch builds a pre-release.

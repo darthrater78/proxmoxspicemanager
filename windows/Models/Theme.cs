@@ -89,4 +89,36 @@ public static class Themes
             Red = H("#f06070"), Mauve = H("#b080e0"), Lavender = H("#9090e0"),
         },
     };
+
+    public const string DefaultAccent = "Orange";
+
+    // Accent presets name a colour slot, so each one takes the active theme's shade of it
+    public static Dictionary<string, Func<Theme, Color>> Accents { get; } = new()
+    {
+        ["Orange"] = t => t.Peach,
+        ["Blue"] = t => t.Blue,
+        ["Teal"] = t => t.Teal,
+        ["Green"] = t => t.Green,
+        ["Purple"] = t => t.Mauve,
+        ["Red"] = t => t.Red,
+        ["Yellow"] = t => t.Yellow,
+    };
+
+    public static Color AccentColor(Theme theme, string accent) =>
+        (Accents.TryGetValue(accent, out var pick) ? pick : Accents[DefaultAccent])(theme);
+
+    // Near-black or white, whichever contrasts more with the accent
+    public static Color OnAccent(Color accent)
+    {
+        static double Lin(byte c)
+        {
+            var v = c / 255.0;
+            return v <= 0.04045 ? v / 12.92 : Math.Pow((v + 0.055) / 1.055, 2.4);
+        }
+        var l = 0.2126 * Lin(accent.R) + 0.7152 * Lin(accent.G) + 0.0722 * Lin(accent.B);
+        const double darkL = 0.0103; // relative luminance of #1A1A1A
+        return (l + 0.05) / (darkL + 0.05) >= 1.05 / (l + 0.05)
+            ? Color.FromRgb(0x1A, 0x1A, 0x1A)
+            : Colors.White;
+    }
 }

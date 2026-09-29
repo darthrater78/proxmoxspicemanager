@@ -56,8 +56,15 @@
                 <TextBlock Text="HOST URL (e.g. https://192.168.1.100:8006)" Style="{StaticResource FieldLabel}"/>
                 <TextBox x:Name="HostBox" Style="{StaticResource FieldInput}" Text="https://"/>
 
-                <CheckBox x:Name="SkipTlsCheck" Content="Skip TLS verification (self-signed certificate)"
-                          Foreground="{DynamicResource ThemeSubtext0}" Margin="0,0,0,16"/>
+                <!-- A self-signed certificate is confirmed on first connect and pinned (no "skip TLS") -->
+                <DockPanel Margin="0,0,0,16">
+                    <Button x:Name="ForgetPinBtn" DockPanel.Dock="Right" Content="Forget" Click="OnForgetPin"
+                            Background="{DynamicResource ThemeSurface0}" Foreground="{DynamicResource ThemeText}"
+                            Padding="10,2" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center"
+                            ToolTip="Confirm the certificate again on the next connect"/>
+                    <TextBlock x:Name="CertText" Foreground="{DynamicResource ThemeSubtext0}" TextWrapping="Wrap"
+                               VerticalAlignment="Center"/>
+                </DockPanel>
 
                 <TextBlock Text="AUTHENTICATION" Style="{StaticResource FieldLabel}"/>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,12">

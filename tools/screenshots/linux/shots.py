@@ -1,0 +1,229 @@
+"""Drives the Linux app's real window with mock data and saves PNGs of it.
+
+Nothing touches a network, the keyring or your own config: the config lives in
+a temporary directory and the refresh is replaced with fixed VMs. Run under an
+X server (run.sh uses Xvfb).
+
+Usage: shots.py <path to proxmox-spice-manager.py> <output dir>
+"""
+import importlib.util
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+from PIL import ImageGrab
+
+script, out = Path(sys.argv[1]), Path(sys.argv[2])
+out.mkdir(parents=True, exist_ok=True)
+
+spec = importlib.util.spec_from_file_location("psm", script)
+psm = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(psm)
+
+config_dir = Path(tempfile.mkdtemp(prefix="psm-shots-"))
+psm.CONFIG_DIR = config_dir
+psm.CONFIG_FILE = config_dir / "connections.json"
+psm.save_config({
+    "clusters": [
+        {"name": name, "host": f"https://{name.lower().replace(' ', '-')}.example.com:8006",
+         "auth_method": "token", "token_id": "shots@pve!shots"}
+        for name in ("Homelab", "Lab East", "DR Site")
+    ],
+    "theme": psm.DEFAULT_THEME,
+    "prereqs_ok": True,
+    "vm_notes": {"Homelab:101": "Daily driver", "Homelab:110": "Testing",
+                 "Homelab:120": "Domain controller", "Homelab:130": "Keep for old apps"},
+    "note_options": ["Daily driver", "Testing", "Domain controller", "Keep for old apps"],
+})
+
+VMS = [
+    (101, "win11-dev", "pve1", "desktops", 3, "running",
+     [("Ethernet", "10.20.30.41"), ("Ethernet 2", "192.168.50.41"), ("Ethernet", "2001:db8:20::41")],
+     "win11"),
+    (102, "fedora-43-ws", "pve1", "desktops", 1, "running", "10.20.30.42", "l26"),
+    (103, "ubuntu-2404-desk", "pve2", "desktops", 0, "stopped", "", "l26"),
+    (110, "kali-lab", "pve2", "security", 5, "running", "no agent", "l26"),
+    (120, "win-server-2025", "pve1", "servers", 2, "running", "10.20.30.60", "win11"),
+    (121, "debian-13-build", "pve3", "servers", 0, "stopped", "", "l26"),
+    (130, "win10-legacy", "pve3", "desktops", 1, "stopped", "", "win10"),
+    (140, "arch-sandbox", "pve2", "", 4, "running", "10.20.30.75", "l26"),
+]
+
+
+# The VMs' own Notes in Proxmox (their config "description")
+PVE_NOTES = {102: "## Build workstation\nSee the wiki for the toolchain setup.",
+             140: "Reset weekly from the base snapshot"}
+
+
+class Shots(psm.ProxmoxSpiceManager):
+    def _refresh_vms(self):
+        cluster = self.current_cluster
+        if not cluster:
+            return
+        self._set_title(cluster["name"])
+        keep = {vm["vmid"] for vm in self._get_selected_vms()}
+        self._vms = [
+            {"vmid": vmid, "name": name, "node": node, "pool": pool, "snaps": snaps,
+             "status": status, "ostype": ostype,
+             # A string stands for why there's no address ("", "no agent")
+             "ips": ip if isinstance(ip, list) else [("eth0", ip)] if ip[:1].isdigit() else [],
+             "ip_note": "" if isinstance(ip, list) or ip[:1].isdigit() else ip,
+             "note": self._lookup_vm_note(vmid), "pve_note": PVE_NOTES.get(vmid, "")}
+            for vmid, name, node, pool, snaps, status, ip, ostype in VMS
+        ]
+        self._loaded_cluster = cluster["name"]
+        self._cluster_status.update({cluster["name"]: (True, len(VMS)),
+                                     "Lab East": (True, 4), "DR Site": (False, None)})
+        self._populate_clusters()
+        self._render_vms(keep)
+        self._show_summary()
+
+
+def capture(app, name):
+    app.update()
+    app.after(300)
+    app.update()
+    x, y = app.winfo_rootx(), app.winfo_rooty()
+    ImageGrab.grab(bbox=(x, y, x + app.winfo_width(), y + app.winfo_height())).save(out / name)
+    print(f"wrote {out / name}")
+
+
+def capture_path(app, path, name):
+    """Grabs a window by its Tk path, which also finds Tk's own dialogs such as message boxes."""
+    x, y, w, h = (int(app.tk.call("winfo", q, path)) for q in ("rootx", "rooty", "width", "height"))
+    ImageGrab.grab(bbox=(x, y, x + w, y + h)).save(out / name)
+    print(f"wrote {out / name}")
+
+
+def capture_dialog(app, open_dialog, fill, name, close):
+    """Dialogs wait on themselves when they open; this captures and closes one from inside."""
+    def grab():
+        path = next(p for p in app.tk.splitlist(app.tk.call("winfo", "children", "."))
+                    if app.tk.call("winfo", "toplevel", p) == p
+                    and app.tk.call("winfo", "ismapped", p))
+        fill(path)
+        app.update()
+        app.after(300)
+        app.update()
+        capture_path(app, path, name)
+        close(path)
+    app.after(600, grab)
+    open_dialog()
+
+
+def fill_cluster(path):
+    dialog = app.nametowidget(path)
+    dialog.name_entry.insert(0, "Homelab")
+    dialog.host_entry.delete(0, "end")
+    dialog.host_entry.insert(0, "https://pve1.example.com:8006")
+    dialog.token_id_entry.insert(0, "spice@pve!spice-manager")
+    dialog.token_secret_entry.insert(0, "00000000-0000-0000-0000-000000000000")
+
+
+def fill_cluster_password(path):
+    dialog = app.nametowidget(path)
+    dialog.name_entry.insert(0, "Homelab")
+    dialog.host_entry.delete(0, "end")
+    dialog.host_entry.insert(0, "https://pve1.example.com:8006")
+    dialog.auth_var.set("password")
+    dialog._toggle_auth()
+    dialog.user_entry.delete(0, "end")
+    dialog.user_entry.insert(0, "spice@pve")
+
+
+def appearance(app, theme, accent=psm.DEFAULT_ACCENT):
+    app._apply_appearance(theme=theme, accent=accent)
+    # It reopens the flyout shortly after; let that happen, then close it
+    app.update()
+    app.after(150)
+    app.update()
+    app._close_popup()
+
+
+def run(app):
+    capture(app, "linux-main.png")
+    for theme in psm.THEMES:
+        appearance(app, theme)
+        capture(app, f"linux-main-{theme.lower().replace(' ', '-')}.png")
+    appearance(app, psm.DEFAULT_THEME)
+
+    tree = app.vm_list
+    tree.selection_set(["vm:101", "vm:103", "vm:130"])
+    capture(app, "linux-state-multiselect.png")
+    app.search_var.set("win")
+    capture(app, "linux-state-search.png")
+    app.search_var.set("")
+    app._set_vm_filter("running")
+    capture(app, "linux-state-running.png")
+    app._set_vm_filter("all")
+    app.search_var.set("nothing-matches")
+    capture(app, "linux-state-empty.png")
+    app.search_var.set("")
+    app._toggle_grouping()
+    app._sort_by("ip")
+    capture(app, "linux-state-ungrouped.png")
+    # A VM with Notes in Proxmox: its first line in the list, all of it in the inspector
+    tree.selection_set(["vm:102"])
+    capture(app, "linux-state-proxmox-notes.png")
+    # Wide window with IPv6 on: the address column grows to show every address
+    app._toggle_ipv6()
+    app.geometry("1800x760")
+    app.update()
+    capture(app, "linux-state-wide.png")
+    # Smallest window, a VM with two adapters selected: title, chips and inspector still fit
+    app.geometry("1000x600")
+    tree.selection_set(["vm:101"])
+    capture(app, "linux-state-small.png")
+    app.geometry("1280x760")
+    app._toggle_ipv6()
+    app.update()
+    app._toggle_grouping()
+    app._sort_by("vmid")
+    app._collapsed_nodes.add("pve3")
+    app._render_vms()
+    capture(app, "linux-state-collapsed.png")
+    app._collapsed_nodes.clear()
+    app._render_vms()
+
+    tree.selection_set(["vm:101"])
+    app._open_appearance()
+    capture(app, "linux-appearance.png")
+    app._close_popup()
+    app._open_settings()
+    capture(app, "linux-settings.png")
+    app._close_popup()
+
+    # First-run setup: the Add Cluster dialog, and a VM's launcher exported to the app menu
+    capture_dialog(app, app._add_cluster, fill_cluster, "linux-add-cluster.png",
+                   lambda path: app.nametowidget(path).destroy())
+    capture_dialog(app, app._add_cluster, fill_cluster_password,
+                   "linux-add-cluster-password.png", lambda path: app.nametowidget(path).destroy())
+    capture_dialog(app, lambda: psm.PasswordPrompt(app, "spice@pve", "https://pve1.example.com:8006"),
+                   lambda path: app.nametowidget(path).pw_entry.insert(0, "example-password"),
+                   "linux-password-prompt.png", lambda path: app.nametowidget(path).destroy())
+    os.environ["HOME"] = str(config_dir)  # the launcher is written under ~/.local/share
+    showinfo = psm.messagebox.showinfo
+    psm.messagebox.showinfo = lambda title, message, **kw: showinfo(
+        title, message.replace(str(config_dir), "~"), **kw)
+    capture_dialog(app, app._export_desktop, lambda path: None, "linux-export-desktop.png",
+                   lambda path: app.tk.call(f"{path}.ok", "invoke"))
+    capture_dialog(app, lambda: psm.IconPickerDialog(app), lambda path: None,
+                   "linux-icon-picker.png", lambda path: app.nametowidget(path).destroy())
+
+    # The first-run check with nothing installed, as Fedora (dnf, sudo) and Debian (apt, no
+    # sudo) show it
+    missing = {name: False for name in psm.REQUIRED_DEPS}
+    for distro, mgr, elevate in (("fedora", "dnf", "sudo"), ("debian", "apt", "su -c")):
+        psm.detect_pkg_manager = lambda mgr=mgr: mgr
+        psm._elevate_prefix = lambda elevate=elevate: elevate
+        capture_dialog(app, lambda: psm.PrereqDialog(app, psm.REQUIRED_DEPS, missing),
+                       lambda path: None, f"linux-prereqs-{distro}.png",
+                       lambda path: app.nametowidget(path).destroy())
+    app.destroy()
+
+
+app = Shots()
+app.geometry("1280x760+0+0")
+app.after(500, lambda: run(app))
+app.mainloop()

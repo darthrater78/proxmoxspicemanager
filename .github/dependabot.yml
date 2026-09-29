@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # Keeps the workflows' SHA pins and their version comments current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The Windows app's NuGet packages.
+  - package-ecosystem: "nuget"
+    directory: "/windows"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      # Grouped for one review, not as a risk judgement: a minor bump can
+      # still need a toolchain change, and only a build settles it.
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Check tools (requirements-dev.txt). The Linux app itself uses only
+  # distro packages, which Dependabot cannot track.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # The screenshot tool's Python packages (tools/screenshots/requirements.txt).
+  - package-ecosystem: "pip"
+    directory: "/tools/screenshots"
+    schedule:
+      interval: "weekly"

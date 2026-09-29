@@ -1,0 +1,3 @@
+# Python packages for run.sh, installed into its own venv. Dependabot keeps this current.
+fonttools==4.66.0
+pillow==12.3.0

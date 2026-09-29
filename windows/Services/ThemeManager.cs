@@ -8,12 +8,16 @@ public static class ThemeManager
 {
     public static Theme Current { get; private set; } = Themes.All["Catppuccin Mocha"];
 
-    public static void Apply(string themeName)
+    public static string CurrentAccent { get; private set; } = Themes.DefaultAccent;
+
+    public static void Apply(string themeName, string? accent = null)
     {
         if (!Themes.All.TryGetValue(themeName, out var theme))
             return;
 
         Current = theme;
+        if (accent != null && Themes.Accents.ContainsKey(accent))
+            CurrentAccent = accent;
 
         var res = Application.Current.Resources;
         res["ThemeBase"] = new SolidColorBrush(theme.Base);
@@ -36,5 +40,9 @@ public static class ThemeManager
         res["ThemeRed"] = new SolidColorBrush(theme.Red);
         res["ThemeMauve"] = new SolidColorBrush(theme.Mauve);
         res["ThemeLavender"] = new SolidColorBrush(theme.Lavender);
+
+        var accentColor = Themes.AccentColor(theme, CurrentAccent);
+        res["ThemeAccent"] = new SolidColorBrush(accentColor);
+        res["ThemeOnAccent"] = new SolidColorBrush(Themes.OnAccent(accentColor));
     }
 }

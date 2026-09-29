@@ -1,0 +1,25 @@
+name: Dependency review
+
+# Fails a pull request that adds or upgrades to a package with a known security
+# advisory (pip, NuGet, GitHub Actions), before it's merged. Holes found after a
+# merge are reported by Dependabot alerts.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Compares the pull request's dependency graph with its base through the
+      # API, so no checkout is needed
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: low

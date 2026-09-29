@@ -13,6 +13,23 @@ public class AppConfig
     [JsonPropertyName("theme")]
     public string Theme { get; set; } = "Catppuccin Mocha";
 
+    [JsonPropertyName("accent")]
+    public string Accent { get; set; } = Themes.DefaultAccent;
+
+    [JsonPropertyName("group_by_node")]
+    public bool GroupByNode { get; set; } = true;
+
+    // Sort key shared with the Linux app: name, vmid, ip, node, pool, snaps, status, notes
+    [JsonPropertyName("vm_sort")]
+    public string VmSort { get; set; } = "vmid";
+
+    [JsonPropertyName("vm_sort_desc")]
+    public bool VmSortDesc { get; set; }
+
+    // Shared with the Linux app; IPv6 addresses stay hidden unless it's on
+    [JsonPropertyName("show_ipv6")]
+    public bool ShowIpv6 { get; set; }
+
     [JsonPropertyName("column_order")]
     public List<string>? ColumnOrder { get; set; }
 
@@ -46,9 +63,17 @@ public class ClusterConfig
     [JsonPropertyName("username")]
     public string Username { get; set; } = "root@pam";
 
-    [JsonPropertyName("skip_tls_verify")]
-    public bool SkipTlsVerify { get; set; }
+    // SHA-256 of the self-signed certificate the user confirmed for this host ("AB:CD:…");
+    // null means the system's CAs decide. Replaces the old skip_tls_verify.
+    [JsonPropertyName("tls_fingerprint")]
+    public string? TlsFingerprint { get; set; }
 
     [JsonPropertyName("token_secret_enc")]
     public string? TokenSecretEnc { get; set; }
+
+    // Plaintext secret, only in export files (the format both apps read). Import moves it
+    // into TokenSecretEnc, so it is never saved to connections.json.
+    [JsonPropertyName("token_secret")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TokenSecret { get; set; }
 }

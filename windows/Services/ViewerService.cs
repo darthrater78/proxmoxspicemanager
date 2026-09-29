@@ -21,14 +21,8 @@ public static class ViewerService
         if (_cachedViewerPath != null && File.Exists(_cachedViewerPath))
             return _cachedViewerPath;
 
-        // Check PATH
-        var pathDirs = Environment.GetEnvironmentVariable("PATH")?.Split(';') ?? [];
-        foreach (var dir in pathDirs)
-        {
-            var candidate = Path.Combine(dir.Trim(), "remote-viewer.exe");
-            if (File.Exists(candidate))
-                return _cachedViewerPath = candidate;
-        }
+        // Known install locations and the registry come before PATH, so a
+        // remote-viewer.exe dropped in a user-writable PATH folder is not preferred.
 
         // Check known install locations
         foreach (var dir in SearchPaths)
@@ -56,7 +50,30 @@ public static class ViewerService
         }
         catch { }
 
+        // Check PATH, skipping empty or relative entries, which would resolve
+        // against the current directory
+        var pathDirs = Environment.GetEnvironmentVariable("PATH")?.Split(';') ?? [];
+        foreach (var dir in pathDirs.Select(d => d.Trim()))
+        {
+            if (!Path.IsPathFullyQualified(dir))
+                continue;
+            var candidate = Path.Combine(dir, "remote-viewer.exe");
+            if (File.Exists(candidate))
+                return _cachedViewerPath = candidate;
+        }
+
         return null;
+    }
+
+    // Random name and CreateNew, so the file (which holds the SPICE password)
+    // cannot be predicted or pre-created. It inherits the per-user %TEMP% ACL.
+    public static string WriteVvFile(string content)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"pve-spice-{Path.GetRandomFileName()}.vv");
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using var writer = new StreamWriter(stream);
+        writer.Write(content);
+        return path;
     }
 
     public static void LaunchSpice(string viewerPath, string vvFilePath)
