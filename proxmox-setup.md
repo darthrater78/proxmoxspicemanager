@@ -48,6 +48,13 @@ In the app you enter the username with its realm, such as `spice@pve` or `root@p
 
 ## Install the SPICE Client
 
+SPICE needs two separate installs, in two different places:
+
+| Where | What | From |
+|---|---|---|
+| **Your computer**, the one running SPICE Manager | The SPICE client, virt-viewer | [spice-space.org](https://www.spice-space.org/download.html) (Windows) or your distro's packages (Linux), below |
+| **Inside each VM** | The guest tools | The VirtIO ISO (Windows guests) or `spice-vdagent` (Linux guests); see [Change the display](#change-the-display) |
+
 The app opens each console in `remote-viewer`, which comes with **virt-viewer**. Install it on the computer you run the app on (not inside the VMs):
 
 - **Windows** — go to [spice-space.org/download.html](https://www.spice-space.org/download.html), download the virt-viewer **Windows installer** (the x64 MSI), and run it. Restart the app afterwards so it finds `remote-viewer`.
@@ -61,7 +68,7 @@ The app opens each console in `remote-viewer`, which comes with **virt-viewer**.
 
 Proxmox's default console is **noVNC**: it opens in a browser tab from the web UI, works with any display type, and needs nothing installed. It's fine for installing an OS or a quick look, but it's slow for everyday desktop use and has no shared clipboard.
 
-**SPICE** opens the VM in a native window (`remote-viewer`) instead. It's smoother for day-to-day desktop work, and with the guest tools installed it adds copy and paste between your computer and the VM, a display that resizes with the window, sound, USB redirection, and multiple monitors. It needs the VM's display set to SPICE, the SPICE client on your computer, and the guest tools in the VM. The noVNC console in Proxmox still works after you switch, if you ever need it.
+**SPICE** opens the VM in a native window (`remote-viewer`) instead. It's smoother for day-to-day desktop work, and with the guest tools installed it adds copy and paste between your computer and the VM, a display that resizes with the window, sound, USB redirection, and multiple monitors. It needs the VM's display set to SPICE, the SPICE client on your computer, and the guest tools inside the VM. The noVNC console in Proxmox still works after you switch, if you ever need it.
 
 > **Use SPICE only for VMs running a desktop operating system** (Windows, or Linux with a graphical desktop). Headless servers and command-line-only VMs gain nothing from it: leave their display as it is and use SSH, or the Proxmox console, for those.
 
@@ -74,9 +81,9 @@ The app lists only VMs whose display is set to SPICE. In the Proxmox web UI, for
 3. Set **Graphic card** to **SPICE**. The SPICE multi-monitor options (dual, 3 or 4 monitors) work too. Click **OK**.
 4. Restart the VM so the change applies: shut it down and start it, or use **Reboot** in Proxmox or in the app. A restart from inside the guest keeps the old display. Until then Proxmox shows the change in orange as pending.
 
-SPICE sessions will open but won't work correctly without guest drivers installed inside the VM:
+Then install the guest tools inside the VM. SPICE sessions will open without them, but won't work correctly (no clipboard, no resizing, and on Windows a basic display driver):
 
-- **Windows guests** — install the [VirtIO drivers](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso) (`virtio-win-guest-tools.exe`) and [SPICE guest tools](https://www.spice-space.org/download.html)
+- **Windows guests** — everything is on the VirtIO ISO. Download [virtio-win.iso](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso), upload it to a Proxmox storage, and attach it to the VM as a CD/DVD drive (**Hardware** → **Add** → **CD/DVD Drive**). In Windows, open the drive and run `virtio-win-guest-tools.exe`: it installs the VirtIO drivers, the SPICE display driver and agent, and the QEMU guest agent in one go. Restart the VM afterwards.
 - **Linux guests** — install `spice-vdagent` (`sudo dnf install spice-vdagent` or `sudo apt install spice-vdagent`)
 
 **Optional: the IP address column.** To see a VM's IP address in the app, turn on the QEMU guest agent: under the VM's **Options**, edit **QEMU Guest Agent** and check **Use QEMU Guest Agent**, then install the agent inside the guest (`qemu-guest-agent` on Linux; on Windows it comes with `virtio-win-guest-tools.exe`) and restart the VM.

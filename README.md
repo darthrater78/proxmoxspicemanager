@@ -147,7 +147,7 @@ Use Import clusters and Export clusters in the Settings menu to transfer cluster
 | IP column shows "no agent" | The VM does not have `agent: 1` enabled in its Proxmox config — this is expected |
 | IP column shows "agent error" | The QEMU guest agent is enabled but not responding — check that `qemu-guest-agent` is installed and running inside the VM |
 | "Token secret not found" error | Re-edit the cluster and re-enter the token secret |
-| SPICE window opens but is black | Install `spice-vdagent` and a QXL driver inside the guest VM |
+| SPICE window opens but is black | Install the guest tools inside the VM: on Windows, `virtio-win-guest-tools.exe` from the VirtIO ISO; on Linux, `spice-vdagent` (see [proxmox-setup.md](proxmox-setup.md#change-the-display)) |
 | remote-viewer not found (Windows) | Install virt-viewer from [spice-space.org](https://www.spice-space.org/download.html) and restart the app |
 | Clipboard not working | Ensure `spice-vdagent` is running in a graphical session, not a TTY |
 
