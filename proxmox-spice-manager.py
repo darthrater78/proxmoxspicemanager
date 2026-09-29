@@ -233,6 +233,7 @@ def cert_fingerprint(der: bytes) -> str:
 def _fetch_fingerprint(hostname: str, port: int, timeout: float) -> str:
     """The certificate a server presents, read without trusting it (only to show the user)."""
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     with socket.create_connection((hostname, port), timeout=timeout) as sock:
@@ -247,6 +248,8 @@ def _connect(host: str, pin: str | None, timeout: float) -> http.client.HTTPSCon
     url = urllib.parse.urlparse(host)
     hostname, port = url.hostname, url.port or 443
     ctx = ssl.create_default_context()
+    # Python before 3.10 can still allow TLS 1.0 and 1.1, depending on the system's OpenSSL
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     if pin:
         # The pin replaces CA and hostname checks; the fingerprint check below is stricter
         ctx.check_hostname = False

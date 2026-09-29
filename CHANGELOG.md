@@ -111,6 +111,8 @@ to the other where the platforms allow it.
   token or password is sent. Clusters that had the option on are asked once.
   The cluster dialog shows the pinned fingerprint with a Forget button, and a
   pin is dropped when the host changes.
+- Linux: connections require TLS 1.2 or newer. On Python before 3.10 the
+  system's OpenSSL settings could still allow TLS 1.0 and 1.1.
 - Windows: importing clusters saved each token secret in plain text in
   `connections.json` (and the cluster then couldn't log in). Import now
   encrypts it with DPAPI, as adding a cluster does.
