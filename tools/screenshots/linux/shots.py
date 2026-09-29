@@ -188,6 +188,18 @@ def run(app):
         title, message.replace(str(config_dir), "~"), **kw)
     capture_dialog(app, app._export_desktop, lambda path: None, "linux-export-desktop.png",
                    lambda path: app.tk.call(f"{path}.ok", "invoke"))
+    capture_dialog(app, lambda: psm.IconPickerDialog(app), lambda path: None,
+                   "linux-icon-picker.png", lambda path: app.nametowidget(path).destroy())
+
+    # The first-run check with nothing installed, as Fedora (dnf, sudo) and Debian (apt, no
+    # sudo) show it
+    missing = {name: False for name in psm.REQUIRED_DEPS}
+    for distro, mgr, elevate in (("fedora", "dnf", "sudo"), ("debian", "apt", "su -c")):
+        psm.detect_pkg_manager = lambda mgr=mgr: mgr
+        psm._elevate_prefix = lambda elevate=elevate: elevate
+        capture_dialog(app, lambda: psm.PrereqDialog(app, psm.REQUIRED_DEPS, missing),
+                       lambda path: None, f"linux-prereqs-{distro}.png",
+                       lambda path: app.nametowidget(path).destroy())
     app.destroy()
 
 
