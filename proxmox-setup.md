@@ -24,7 +24,7 @@ From the Datacenter section, go to **Users** and create a new user. Use the **Pr
 
 Create a minimal role with only the permissions needed. Select `VM.PowerMgmt` `VM.Audit` `VM.Snapshot.Rollback` `VM.Console` `Pool.Audit` `VM.Snapshot` `VM.GuestAgent.Audit`
 
-> **Note:** `VM.GuestAgent.Audit` is optional — it enables the live IP address column. Without it, the IP column will be blank but everything else works normally.
+> **Note:** `VM.GuestAgent.Audit` is optional: it lets the app show each VM's IP addresses from the guest agent. Without it, the Address column shows "agent error", and everything else works normally.
 
 <img width="412" height="161" alt="image" src="https://github.com/user-attachments/assets/6bb496db-c912-40e2-bf56-492bed073d0e" />
 
@@ -86,7 +86,7 @@ Then install the guest tools inside the VM. SPICE sessions will open without the
 - **Windows guests** — everything is on the VirtIO ISO. Download [virtio-win.iso](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso), upload it to a Proxmox storage, and attach it to the VM as a CD/DVD drive (**Hardware** → **Add** → **CD/DVD Drive**). In Windows, open the drive and run `virtio-win-guest-tools.exe`: it installs the VirtIO drivers, the SPICE display driver and agent, and the QEMU guest agent in one go. Restart the VM afterwards.
 - **Linux guests** — install `spice-vdagent` (`sudo dnf install spice-vdagent` or `sudo apt install spice-vdagent`)
 
-**Optional: the IP address column.** To see a VM's IP address in the app, turn on the QEMU guest agent: under the VM's **Options**, edit **QEMU Guest Agent** and check **Use QEMU Guest Agent**, then install the agent inside the guest (`qemu-guest-agent` on Linux; on Windows it comes with `virtio-win-guest-tools.exe`) and restart the VM.
+**Optional: IP addresses in the app.** To see a VM's IP addresses in the app's Address column, turn on the QEMU guest agent: under the VM's **Options**, edit **QEMU Guest Agent** and check **Use QEMU Guest Agent**, then install the agent inside the guest (`qemu-guest-agent` on Linux; on Windows it comes with `virtio-win-guest-tools.exe`) and restart the VM.
 
 ---
 
@@ -114,7 +114,7 @@ When the app first connects to the cluster, it asks for the password:
 |---|---|
 | ![The password prompt on Windows, asking for the password of spice@pve on the cluster's host](docs/screenshots/windows-password-prompt.png) | ![The password prompt on Linux](docs/screenshots/linux-password-prompt.png) |
 
-Choose the cluster and hit **Refresh**. Any VM with the display set to SPICE will show up here.
+Choose the cluster and its VMs load: every VM with the display set to SPICE shows up here. **Refresh** (F5) loads them again.
 
 ![The main window listing the cluster's SPICE VMs, grouped by node](docs/screenshots/windows-main.png)
 

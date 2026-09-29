@@ -10,6 +10,8 @@ to the other where the platforms allow it.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-28
+
 ### Changed
 
 - **Redesigned main window, on both platforms.** VMs are grouped by node with a
@@ -49,6 +51,20 @@ to the other where the platforms allow it.
   (start, snapshot, …) always get a fresh connection, so one can never be sent
   twice.
 
+- **One version for both platforms.** Windows moves from 1.2.1 and Linux from
+  2.3.0 to 3.0.0. Each release now carries both `Proxmox-SPICE-Manager.exe` and
+  `proxmox-spice-manager.py`, plus a `SHA256SUMS` file. Tags are plain
+  `vX.Y.Z`; the `-wpf` suffix is retired.
+- **Releases are built by GitHub Actions** from the tagged commit, instead of by
+  hand, with a build provenance attestation for both files (see the README for
+  how to verify a download).
+- Windows: the window title and the Release Notes link come from the build's own
+  version. The link opens this version's notes instead of the latest release.
+- Windows: the single-file exe is compressed, so the download is smaller.
+- Linux changes from 2.3.0, which was never released on its own: debug logging
+  toggle with a rotating log file (5 MB cap), VM notes scoped by cluster name so
+  they no longer collide across clusters, and a single-instance guard.
+
 ### Added
 
 - Keyboard shortcuts: Enter opens the console, S starts, Shift+S shuts down,
@@ -62,6 +78,25 @@ to the other where the platforms allow it.
 - `tools/screenshots/`: renders both apps with mock data, in every theme, for
   documentation and design review (Windows under Wine, Linux natively, both on
   Xvfb).
+
+- Both apps show every address the guest agent reports, grouped by adapter in
+  the details panel. The list's Address column widens with the window and
+  shows as many as fit, with "+N" for the rest. Loopback and link-local
+  addresses are left out. IPv6 addresses are hidden
+  unless the "IPv6" chip beside "Group by node" is on (`show_ipv6`, shared by
+  both apps).
+- Both apps show each VM's Notes from Proxmox: the first line in the list's
+  Notes column (this app's own note where Proxmox has none), and the text in
+  a read-only "Proxmox" row of the details panel.
+- Windows: notes get their own column in the VM list, instead of trailing the
+  grey second line, and the list has column headings that sort when clicked,
+  like on Linux. On both apps every heading carries a ↕ mark, and the sorted
+  one shows ▲ or ▼ (in the accent colour on Windows).
+- Windows: node headings are a shaded band that folds its VMs away when
+  clicked, like on Linux.
+- GitHub and Release notes links in the app header, moved out of Settings.
+- Linux: Ctrl+A selects every VM on screen, as on Windows.
+- MIT `LICENSE` file (the README already stated MIT).
 
 ### Security
 
@@ -79,6 +114,16 @@ to the other where the platforms allow it.
 - Windows: importing clusters saved each token secret in plain text in
   `connections.json` (and the cluster then couldn't log in). Import now
   encrypts it with DPAPI, as adding a cluster does.
+
+- Both apps refuse a host URL that is not `https://` when saving a cluster, and
+  never send a password login over plain HTTP (an imported config could
+  previously do so).
+- Windows: the SPICE connection file, which holds the session password, gets a
+  random name and is created fresh, instead of a predictable
+  `pve-spice-<vmid>.vv` in `%TEMP%`.
+- Windows: `remote-viewer.exe` is looked up in its install folders and the
+  registry before `PATH`, and relative `PATH` entries are skipped. The Start
+  Menu shortcut helper runs PowerShell from System32 by full path.
 
 ### Fixed
 
@@ -111,74 +156,19 @@ to the other where the platforms allow it.
   those clusters so the secret can be entered again.
 - Linux: editing a cluster kept using its old settings (host, token, TLS
   option) until the app was restarted.
-- At the smallest window size (1000×600), on both platforms: the search box
-  covered the cluster name, the IPv6, Group and Sort buttons overlapped the
-  filters, and the details panel cut off its last actions (Windows lost Force
-  stop). Now the search box narrows first, then Refresh drops its label, and a
-  name that still doesn't fit ends in "…"; the view buttons move to a second
-  row; and the details panel scrolls with Force stop kept in view. Windows
-  also drops the Notes, Snapshots and Address columns as the window narrows,
-  as Linux does, instead of cutting off Status and Connect.
+- In narrow windows, down to the smallest size (1000×600), nothing is cut
+  off any more. The search box narrows first, then Refresh drops its label,
+  and a cluster name that still doesn't fit ends in "…"; the view buttons move
+  to a second row; the details panel scrolls with Force stop kept in view; and
+  the list drops Notes, then Snapshots, then Address, so Status and the
+  Connect button always show. Before, on both platforms, the search box
+  covered the cluster name, buttons overlapped, the details panel lost its
+  last actions (Windows lost Force stop), and the list's right-hand columns
+  were cut off.
 - Linux: closing the window while VMs were loading printed "Exception in
   thread … main thread is not in main loop".
 
-## [3.0.0] - 2026-09-27
-
-### Changed
-
-- **One version for both platforms.** Windows moves from 1.2.1 and Linux from
-  2.3.0 to 3.0.0. Each release now carries both `Proxmox-SPICE-Manager.exe` and
-  `proxmox-spice-manager.py`, plus a `SHA256SUMS` file. Tags are plain
-  `vX.Y.Z`; the `-wpf` suffix is retired.
-- **Releases are built by GitHub Actions** from the tagged commit, instead of by
-  hand, with a build provenance attestation for both files (see the README for
-  how to verify a download).
-- Windows: the window title and the Release Notes link come from the build's own
-  version. The link opens this version's notes instead of the latest release.
-- Windows: the single-file exe is compressed, so the download is smaller.
-- Linux changes from 2.3.0, which was never released on its own: debug logging
-  toggle with a rotating log file (5 MB cap), VM notes scoped by cluster name so
-  they no longer collide across clusters, and a single-instance guard.
-
-### Security
-
-- Both apps refuse a host URL that is not `https://` when saving a cluster, and
-  never send a password login over plain HTTP (an imported config could
-  previously do so).
-- Windows: the SPICE connection file, which holds the session password, gets a
-  random name and is created fresh, instead of a predictable
-  `pve-spice-<vmid>.vv` in `%TEMP%`.
-- Windows: `remote-viewer.exe` is looked up in its install folders and the
-  registry before `PATH`, and relative `PATH` entries are skipped. The Start
-  Menu shortcut helper runs PowerShell from System32 by full path.
-
-### Added
-
-- Both apps show every address the guest agent reports, grouped by adapter in
-  the details panel. The list's Address column widens with the window and
-  shows as many as fit, with "+N" for the rest. Loopback and link-local
-  addresses are left out. IPv6 addresses are hidden
-  unless the "IPv6" chip beside "Group by node" is on (`show_ipv6`, shared by
-  both apps).
-- Both apps show each VM's Notes from Proxmox: the first line in the list's
-  Notes column (this app's own note where Proxmox has none), and the text in
-  a read-only "Proxmox" row of the details panel.
-- Windows: notes get their own column in the VM list, instead of trailing the
-  grey second line, and the list has column headings that sort when clicked,
-  like on Linux. On both apps every heading carries a ↕ mark, and the sorted
-  one shows ▲ or ▼ (in the accent colour on Windows).
-- Windows: node headings are a shaded band that folds its VMs away when
-  clicked, like on Linux.
-- GitHub and Release notes links in the app header, moved out of Settings.
-- Linux: Ctrl+A selects every VM on screen, as on Windows.
-- MIT `LICENSE` file (the README already stated MIT).
-
-### Fixed
-
 - Linux: a node heading could not be folded while it held the selected VM.
-- Linux: in narrow windows the Status and Notes columns were cut off the
-  right edge. The least-needed columns (Pool, Snaps, Node, ID, Address) now
-  make way instead, never the one the list is sorted by.
 - A guest agent enabled as `enabled=1,…` in the VM config was not detected.
   Linux now also shows "no agent" and "agent error" like Windows.
 - Linux: when launching a SPICE session failed, the error dialog never
