@@ -12,6 +12,32 @@ A desktop GUI application for managing and launching SPICE console sessions to P
 
 Both platforms share one version number, and each release carries both the Windows exe and the Linux script.
 
+![The Windows app: clusters on the left, the VMs of the selected cluster grouped by node, and the selected VM's details and actions on the right](docs/screenshots/windows-main.png)
+
+## Screenshots
+
+The Linux app has the same layout, drawn with tkinter:
+
+![The Linux app's main window](docs/screenshots/linux-main.png)
+
+Select several VMs with Ctrl-click or Shift-click to start, shut down or reboot them together:
+
+![Three VMs selected, with the actions panel acting on all of them](docs/screenshots/multi-select.png)
+
+Turn off **Group by node** for one flat list, sortable by any column (here by address):
+
+![The VM list ungrouped and sorted by IP address](docs/screenshots/flat-list.png)
+
+Five themes and seven accent colours, picked from the Appearance button next to Settings:
+
+![The main window in Catppuccin Mocha, Catppuccin Latte, Nord, Dracula and OLED Dark, and the Appearance flyout](docs/screenshots/themes.png)
+
+The Settings menu (Linux shown) holds cluster editing, import and export, the debug log, the prerequisite checker and app menu integration:
+
+![The Linux Settings menu open](docs/screenshots/linux-settings.png)
+
+Screenshots use mock clusters and VMs; `tools/screenshots/` renders them (see [its README](tools/screenshots/README.md)).
+
 ## Features
 
 - **Multi-cluster management** — connect to multiple Proxmox clusters with saved credentials
@@ -132,6 +158,8 @@ scripts/                        # check.sh, build.sh, version.sh (used by CI and
 CHANGELOG.md                    # Release history
 README.md                       # This file
 proxmox-setup.md                # Proxmox server config and app setup (all platforms)
+docs/screenshots/               # Screenshots shown in this README
+tools/screenshots/              # Renders screenshots of both apps with mock data
 linux-setup.md                  # Linux installation walkthrough with screenshots
 ```
 

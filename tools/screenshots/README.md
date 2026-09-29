@@ -34,6 +34,20 @@ own, and the build. A first run takes under a minute.
 | `proposal-*.png` | Design prototypes from `windows/proposals/` |
 | `shots.log` | Progress and errors |
 
+## README screenshots
+
+The images in the top-level README live in `docs/screenshots/`. To refresh them
+after a UI change:
+
+```sh
+tools/screenshots/run.sh
+~/.cache/proxmox-spice-screenshots/venv/bin/python tools/screenshots/readme_images.py \
+    dist/screenshots docs/screenshots
+```
+
+`readme_images.py` copies the chosen captures, builds `themes.png` from the
+per-theme ones, and saves them as palette PNGs to keep the repository small.
+
 ## Fonts
 
 The Linux app uses the system's fonts (DejaVu Sans on Debian), as it would on a
