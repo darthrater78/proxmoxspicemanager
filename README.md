@@ -2,6 +2,8 @@
 
 A desktop GUI application for managing and launching SPICE console sessions to Proxmox VE virtual machines. No browser required.
 
+Proxmox's default noVNC console runs in a browser tab. SPICE opens the VM in a native window instead: smoother for everyday desktop use, with a shared clipboard, a display that resizes with the window, sound, USB redirection, and multiple monitors. It's meant for VMs running a desktop operating system; use SSH for headless servers. See [SPICE or noVNC?](proxmox-setup.md#spice-or-novnc) for details.
+
 - **Windows** — native WPF app (C#/.NET 8), single-file exe with zero dependencies
 - **Linux** — Python + tkinter
 

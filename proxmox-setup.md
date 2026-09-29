@@ -57,9 +57,17 @@ The app opens each console in `remote-viewer`, which comes with **virt-viewer**.
 
 ## Switch a VM's Display to SPICE
 
-> **SPICE is for graphical (GUI) operating systems only.** Headless or CLI-only VMs won't benefit from a SPICE console — use SSH for those instead.
+### SPICE or noVNC?
 
-The app lists only VMs whose display is set to SPICE. In the Proxmox web UI, for each VM:
+Proxmox's default console is **noVNC**: it opens in a browser tab from the web UI, works with any display type, and needs nothing installed. It's fine for installing an OS or a quick look, but it's slow for everyday desktop use and has no shared clipboard.
+
+**SPICE** opens the VM in a native window (`remote-viewer`) instead. It's smoother for day-to-day desktop work, and with the guest tools installed it adds copy and paste between your computer and the VM, a display that resizes with the window, sound, USB redirection, and multiple monitors. It needs the VM's display set to SPICE, the SPICE client on your computer, and the guest tools in the VM. The noVNC console in Proxmox still works after you switch, if you ever need it.
+
+> **Use SPICE only for VMs running a desktop operating system** (Windows, or Linux with a graphical desktop). Headless servers and command-line-only VMs gain nothing from it: leave their display as it is and use SSH, or the Proxmox console, for those.
+
+### Change the display
+
+The app lists only VMs whose display is set to SPICE. In the Proxmox web UI, for each desktop VM:
 
 1. Select the VM and open **Hardware**.
 2. Double-click **Display** (or select it and click **Edit**).
