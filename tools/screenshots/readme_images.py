@@ -21,6 +21,10 @@ COPIES = {
     "windows-add-cluster.png": "windows-add-cluster.png",
     "linux-add-cluster.png": "linux-add-cluster.png",
     "linux-export-desktop.png": "linux-export-desktop.png",
+    "windows-add-cluster-password.png": "windows-add-cluster-password.png",
+    "linux-add-cluster-password.png": "linux-add-cluster-password.png",
+    "windows-password-prompt.png": "windows-password-prompt.png",
+    "linux-password-prompt.png": "linux-password-prompt.png",
     # linux-setup.md
     "linux-prereqs-fedora.png": "linux-prereqs-fedora.png",
     "linux-prereqs-debian.png": "linux-prereqs-debian.png",

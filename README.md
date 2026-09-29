@@ -40,7 +40,7 @@ Screenshots use mock clusters and VMs; `tools/screenshots/` renders them (see [i
 
 ## Features
 
-- **Multi-cluster management** — connect to multiple Proxmox clusters with saved credentials
+- **Multi-cluster management** — connect to multiple Proxmox clusters, each with an API token (saved securely) or a username and password (the password is asked for, never saved)
 - **Auto-discovery** — automatically detects SPICE-enabled VMs across all cluster nodes
 - **Live IP address** — shows each running VM's IP via QEMU guest agent (requires `VM.GuestAgent.Audit` permission)
 - **One-click SPICE launch** — opens `remote-viewer` sessions from a VM's Connect button, a double-click, or Enter
@@ -88,7 +88,7 @@ sudo apt install python3-tk python3-keyring virt-viewer
 ## Getting Started
 
 > [!IMPORTANT]
-> **Step 1 — Configure Proxmox first:** create a user, role, API token, and set up your VMs → [proxmox-setup.md](proxmox-setup.md)
+> **Step 1 — Configure Proxmox first:** create a user and role, choose an API token or username and password login, install the SPICE client, and switch your VMs' display to SPICE → [proxmox-setup.md](proxmox-setup.md)
 >
 > **Then install the app for your platform:**
 > - **Windows** — download `Proxmox-SPICE-Manager.exe` from [Releases](../../releases/latest)
@@ -127,6 +127,7 @@ Use Import clusters and Export clusters in the Settings menu to transfer cluster
 
 - **Linux:** Token secrets are stored in your desktop environment's keyring (GNOME Keyring, KDE Wallet, etc.) via the `keyring` Python package. They are never written to the JSON config file.
 - **Windows:** Token secrets are encrypted using Windows DPAPI (`CryptProtectData`), which ties the encryption key to your Windows user account. The encrypted blobs are stored as base64 in `connections.json`. They cannot be decrypted by another user or on another machine.
+- **Password logins:** the password is never saved on either platform. The app asks for it when it connects, keeps the Proxmox login ticket in memory, and renews the ticket every hour while it runs.
 - **TLS:** Certificates signed by a CA your system trusts work as they are. Proxmox's own self-signed certificate is shown with its SHA-256 fingerprint the first time you connect; compare it with Node → System → Certificates → Fingerprint in Proxmox and confirm, and the app pins it for that cluster (like SSH host keys). After that only that certificate is accepted, and a changed one brings up a warning before anything is sent. The check happens before the API token or password leaves your machine. Host URLs must use `https://`; the apps refuse to save or log in to a plain `http://` URL.
 - **Export files** contain plaintext secrets — handle them accordingly.
 

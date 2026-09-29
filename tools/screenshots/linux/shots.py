@@ -121,6 +121,17 @@ def fill_cluster(path):
     dialog.token_secret_entry.insert(0, "00000000-0000-0000-0000-000000000000")
 
 
+def fill_cluster_password(path):
+    dialog = app.nametowidget(path)
+    dialog.name_entry.insert(0, "Homelab")
+    dialog.host_entry.delete(0, "end")
+    dialog.host_entry.insert(0, "https://pve1.example.com:8006")
+    dialog.auth_var.set("password")
+    dialog._toggle_auth()
+    dialog.user_entry.delete(0, "end")
+    dialog.user_entry.insert(0, "spice@pve")
+
+
 def appearance(app, theme, accent=psm.DEFAULT_ACCENT):
     app._apply_appearance(theme=theme, accent=accent)
     # It reopens the flyout shortly after; let that happen, then close it
@@ -182,6 +193,11 @@ def run(app):
     # First-run setup: the Add Cluster dialog, and a VM's launcher exported to the app menu
     capture_dialog(app, app._add_cluster, fill_cluster, "linux-add-cluster.png",
                    lambda path: app.nametowidget(path).destroy())
+    capture_dialog(app, app._add_cluster, fill_cluster_password,
+                   "linux-add-cluster-password.png", lambda path: app.nametowidget(path).destroy())
+    capture_dialog(app, lambda: psm.PasswordPrompt(app, "spice@pve", "https://pve1.example.com:8006"),
+                   lambda path: app.nametowidget(path).pw_entry.insert(0, "example-password"),
+                   "linux-password-prompt.png", lambda path: app.nametowidget(path).destroy())
     os.environ["HOME"] = str(config_dir)  # the launcher is written under ~/.local/share
     showinfo = psm.messagebox.showinfo
     psm.messagebox.showinfo = lambda title, message, **kw: showinfo(

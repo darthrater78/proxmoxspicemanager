@@ -183,6 +183,24 @@ static class Program
         Pump(600);
         Capture(dialog, Path.Combine(outDir, "windows-add-cluster.png"));
         dialog.Close();
+
+        // The same with a Proxmox user and password, and the prompt that asks for the password
+        dialog = new ProxmoxSpiceManager.Dialogs.ClusterDialog(Get<AppConfig>(w, "_config")) { Owner = w };
+        ((TextBox)dialog.FindName("NameBox")).Text = "Homelab";
+        ((TextBox)dialog.FindName("HostBox")).Text = "https://pve1.example.com:8006";
+        ((RadioButton)dialog.FindName("PasswordRadio")).IsChecked = true;
+        ((TextBox)dialog.FindName("UsernameBox")).Text = "spice@pve";
+        dialog.Show();
+        Pump(600);
+        Capture(dialog, Path.Combine(outDir, "windows-add-cluster-password.png"));
+        dialog.Close();
+
+        var prompt = new ProxmoxSpiceManager.Dialogs.PasswordDialog("spice@pve", "https://pve1.example.com:8006") { Owner = w };
+        ((PasswordBox)prompt.FindName("PasswordBox")).Password = "example-password";
+        prompt.Show();
+        Pump(600);
+        Capture(prompt, Path.Combine(outDir, "windows-password-prompt.png"));
+        prompt.Close();
         Log("add cluster captured");
     }
 
